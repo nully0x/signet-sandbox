@@ -15,6 +15,9 @@ Statuses: `[ ]` pending · `[~]` in progress · `[x]` verified (with date)
 Every checkpoint has a verifiable gate command. No checkpoint is marked `[x]`
 without running its gate. Re-run the whole suite with `just verify-all`.
 
+The path is strictly linear from M3 on: take the first unchecked item
+top-to-bottom; each milestone assumes only the ones before it.
+
 ## M0 — Scaffold
 
 - [x] CP-0.1 Cargo workspace builds — `cargo build --workspace` — 2026-09-01
@@ -47,28 +50,29 @@ building the control plane on them.
 
 # MVP
 
-## M3 — In-cluster core stack (substrate de-risk)
+## M3 — Auth + persistence
 
-The kube-rs/orchestration long pole leads, since the substrate is k3s. Port the
-single-tenant `deploy/dev` into a **per-environment template**.
+Pure Rust, no cluster needed; lands the token model and DB schema the
+orchestrator builds on.
 
-- [ ] CP-3.1 k3d cluster up — `just cluster-up && kubectl get nodes`
-- [ ] CP-3.2 Per-env core template (namespace + generated `signet-secrets` + bitcoind STS + signer Deployment) applies cleanly for one env
-- [ ] CP-3.3 In-cluster signer produces blocks — height increases ≥2 blocks/min over a 90s window
-- [ ] CP-3.4 Per-env signer key → distinct `signet_challenge` — two envs get different challenges
+- [ ] CP-3.1 NIP-98 event verification — `cargo test -p signet-nostr`
+- [ ] CP-3.2 API-token issuance + verification — `cargo test -p signet-nostr`
+- [ ] CP-3.3 Migrations create `Environment` + `ApiToken` (`npub_owner`, nullable `workspace_id`/`ttl`/`expires_at`) — `sqlx migrate run` then schema check
+- [ ] CP-3.4 Unauthenticated request rejected — missing/invalid NIP-98 returns `-32002`
 
-## M4 — Auth + persistence
+## M4 — In-cluster core stack (substrate de-risk)
 
-Independent of M3; unit-testable without a cluster.
+The k3s/kube-rs long pole. Port the single-tenant `deploy/dev` into a
+**per-environment template**.
 
-- [ ] CP-4.1 NIP-98 event verification — `cargo test -p signet-nostr`
-- [ ] CP-4.2 API-token issuance + verification — `cargo test -p signet-nostr`
-- [ ] CP-4.3 Migrations create `Environment` + `ApiToken` (`npub_owner`, nullable `workspace_id`/`ttl`/`expires_at`) — `sqlx migrate run` then schema check
-- [ ] CP-4.4 Unauthenticated request rejected — missing/invalid NIP-98 returns `-32002`
+- [ ] CP-4.1 k3d cluster up — `just cluster-up && kubectl get nodes`
+- [ ] CP-4.2 Per-env core template (namespace + generated `signet-secrets` + bitcoind STS + signer Deployment) applies cleanly for one env
+- [ ] CP-4.3 In-cluster signer produces blocks — height increases ≥2 blocks/min over a 90s window
+- [ ] CP-4.4 Per-env signer key → distinct `signet_challenge` — two envs get different challenges
 
 ## M5 — Orchestrator + create/get/destroy
 
-Wires M3 (template) + M4 (auth/db) into the first real API methods.
+Wires M3 (auth/db) + M4 (template) into the first real API methods.
 
 - [ ] CP-5.1 `kube-rs` creates an isolated `env-<id>` namespace — `kubectl get ns env-<id>`
 - [ ] CP-5.2 `environment.create` returns a real connection bundle (platform-generated challenge) — live RPC call
