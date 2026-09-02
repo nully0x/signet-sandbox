@@ -56,7 +56,7 @@ Pure Rust, no cluster needed; lands the token model and DB schema the
 orchestrator builds on.
 
 - [x] CP-3.1 NIP-98 event verification — `cargo test -p signet-nostr` — 2026-09-02
-- [ ] CP-3.2 API-token issuance + verification — `cargo test -p signet-nostr`
+- [x] CP-3.2 API-token issuance + verification — `cargo test -p signet-nostr` — 2026-09-02
 - [ ] CP-3.3 Migrations create `Environment` + `ApiToken` (`npub_owner`, nullable `workspace_id`/`ttl`/`expires_at`) — `sqlx migrate run` then schema check
 - [ ] CP-3.4 Unauthenticated request rejected — missing/invalid NIP-98 returns `-32002`
 

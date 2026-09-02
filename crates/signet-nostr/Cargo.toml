@@ -6,5 +6,6 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+bitcoin = { workspace = true }
 nostr = { workspace = true }
 thiserror = { workspace = true }

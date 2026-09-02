@@ -1,11 +1,19 @@
+use std::fmt;
 use std::time::Duration;
 
+use bitcoin::hashes::{Hash as _, sha256};
+use bitcoin::hex::{DisplayHex as _, FromHex as _};
+use bitcoin::secp256k1::rand::{RngCore, rngs::OsRng};
 use nostr::event::{Event, Kind};
 use nostr::key::PublicKey;
 use nostr::types::Timestamp;
 use thiserror::Error;
 
 pub const NIP98_KIND: Kind = Kind::HttpAuth;
+
+pub const TOKEN_PREFIX: &str = "sgn";
+
+const TOKEN_SECRET_BYTES: usize = 32;
 
 const MAX_FUTURE_SKEW: Duration = Duration::from_secs(60);
 
@@ -23,6 +31,73 @@ pub enum Nip98Error {
     MethodMismatch,
     #[error("`created_at` outside the acceptance window")]
     Stale,
+}
+
+#[derive(Debug, Error)]
+#[error("token must be `{TOKEN_PREFIX}_` followed by 64 hex characters")]
+pub struct MalformedToken;
+
+pub struct ApiToken {
+    raw: String,
+}
+
+impl ApiToken {
+    pub fn generate() -> Self {
+        let mut secret = [0u8; TOKEN_SECRET_BYTES];
+        OsRng.fill_bytes(&mut secret);
+        Self {
+            raw: format!("{TOKEN_PREFIX}_{}", secret.as_hex()),
+        }
+    }
+
+    pub fn parse(raw: &str) -> Result<Self, MalformedToken> {
+        let hex = raw
+            .strip_prefix(TOKEN_PREFIX)
+            .and_then(|rest| rest.strip_prefix('_'))
+            .ok_or(MalformedToken)?;
+        let secret = <[u8; TOKEN_SECRET_BYTES]>::from_hex(hex).map_err(|_| MalformedToken)?;
+        Ok(Self {
+            raw: format!("{TOKEN_PREFIX}_{}", secret.as_hex()),
+        })
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.raw
+    }
+
+    pub fn hash(&self) -> TokenHash {
+        TokenHash::from_raw(&self.raw)
+    }
+}
+
+impl fmt::Display for ApiToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.raw)
+    }
+}
+
+pub struct TokenHash {
+    hex: String,
+}
+
+impl TokenHash {
+    pub fn from_raw(raw: &str) -> Self {
+        Self {
+            hex: sha256::Hash::hash(raw.as_bytes()).to_string(),
+        }
+    }
+
+    pub fn as_hex(&self) -> &str {
+        &self.hex
+    }
+
+    pub fn matches(&self, other: &TokenHash) -> bool {
+        constant_time_eq(self.hex.as_bytes(), other.hex.as_bytes())
+    }
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 pub fn verify_http_auth(
@@ -216,5 +291,62 @@ mod tests {
         );
         assert_eq!(payload_hash(&event), Some("0123abcd"));
         assert_eq!(payload_hash(&auth_event(&keys)), None);
+    }
+
+    #[test]
+    fn generated_token_has_expected_shape() {
+        let token = ApiToken::generate();
+        let raw = token.as_str();
+        let hex = raw.strip_prefix("sgn_").unwrap();
+        assert_eq!(hex.len(), 64);
+        assert!(hex.bytes().all(|b| b.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn generated_tokens_are_unique() {
+        assert_ne!(ApiToken::generate().as_str(), ApiToken::generate().as_str());
+    }
+
+    #[test]
+    fn parse_round_trips() {
+        let token = ApiToken::generate();
+        let reparsed = ApiToken::parse(token.as_str()).unwrap();
+        assert_eq!(reparsed.as_str(), token.as_str());
+        assert!(reparsed.hash().matches(&token.hash()));
+    }
+
+    #[test]
+    fn parse_rejects_malformed_tokens() {
+        for raw in [
+            "",
+            "sgn",
+            "sgn_",
+            "sgn_0",
+            "sgn_00",
+            "not_x64hexcharsandthenmorehexcharactersuntilweareat64characters00",
+            "sgn_zzzz0000000000000000000000000000000000000000000000000000000000",
+            "other_0000000000000000000000000000000000000000000000000000000000000000",
+        ] {
+            assert!(ApiToken::parse(raw).is_err(), "accepted {raw:?}");
+        }
+    }
+
+    #[test]
+    fn hash_is_deterministic_per_token() {
+        let token = ApiToken::generate();
+        assert_eq!(token.hash().as_hex(), token.hash().as_hex());
+        assert_ne!(token.hash().as_hex(), ApiToken::generate().hash().as_hex());
+    }
+
+    #[test]
+    fn hash_matches_presented_token_against_stored() {
+        let issued = ApiToken::generate();
+        let stored = issued.hash();
+
+        let presented = ApiToken::parse(issued.as_str()).unwrap();
+        assert!(TokenHash::from_raw(presented.as_str()).matches(&stored));
+
+        let wrong = TokenHash::from_raw(ApiToken::generate().as_str());
+        assert!(!wrong.matches(&stored));
     }
 }
