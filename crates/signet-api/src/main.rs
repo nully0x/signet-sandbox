@@ -11,6 +11,13 @@ struct Args {
     #[arg(long, env = "SIGNET_API_LISTEN", default_value = "0.0.0.0:8080")]
     listen: SocketAddr,
 
+    #[arg(
+        long,
+        env = "SIGNET_API_PUBLIC_URL",
+        default_value = "http://localhost:8080"
+    )]
+    public_url: String,
+
     #[arg(long, env = "DATABASE_URL")]
     database_url: String,
 }
@@ -27,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
 
     let pool = signet_db::connect(&args.database_url).await?;
 
-    let app = rpc::router(pool);
+    let app = rpc::router(pool, args.public_url);
 
     let listener = tokio::net::TcpListener::bind(args.listen).await?;
     tracing::info!(listen = %args.listen, "signet-api listening");
