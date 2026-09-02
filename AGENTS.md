@@ -67,10 +67,10 @@ user.name/user.email — never by a tool
 or agent identity, and commit messages carry no AI co-author trailers.
 Authorship is part of the no-tool-names rule: check `git config user.name`
 before the first commit of a session and fix it rather than committing under
-a default. Format: `subsystem: imperative summary under 50 chars`, then a
-body in natural prose explaining the why more than the what (no bullet-point
-dumps). Prefixes: package name for single-package changes (`core:`),
-`pkg1+pkg2:` or `multi:` across packages, `docs:`, `build:`, `ci:`, `test:`.
+a default. Format: `type: imperative summary under 50 chars`, then a body in
+natural prose explaining the why more than the what (no bullet-point dumps).
+Types: `feat` for new functionality (`feat: NIP-98 event verification`),
+`fix` for bug fixes, `refactor`, `docs`, `build`, `ci`, `test`, `chore`.
 Lock files, generated files, and vendored code get their own commits.
 
 ## Gotchas — hard-won, do not re-derive
