@@ -55,6 +55,24 @@ Never mark `[x]` without running its gate.
   (`skip_serializing_if`), not nulled.
 - Rust edition 2024, stable toolchain. Match existing style; no comments unless asked.
 
+## Commits
+
+Git is owner-driven: the user performs all git operations, including commit.
+Agents never stage, commit, or push — at most they suggest a one-liner
+describing what was worked on.
+
+Make incremental, atomic commits that each tell one part of the story. Every
+commit is authored by the repository owner — the repo-local
+user.name/user.email — never by a tool
+or agent identity, and commit messages carry no AI co-author trailers.
+Authorship is part of the no-tool-names rule: check `git config user.name`
+before the first commit of a session and fix it rather than committing under
+a default. Format: `subsystem: imperative summary under 50 chars`, then a
+body in natural prose explaining the why more than the what (no bullet-point
+dumps). Prefixes: package name for single-package changes (`core:`),
+`pkg1+pkg2:` or `multi:` across packages, `docs:`, `build:`, `ci:`, `test:`.
+Lock files, generated files, and vendored code get their own commits.
+
 ## Gotchas — hard-won, do not re-derive
 
 1. **BIP34 coinbase height (the signet trap).** Core compares the coinbase
