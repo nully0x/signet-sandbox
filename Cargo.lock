@@ -1862,8 +1862,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64",
  "chrono",
  "clap",
+ "nostr",
  "serde",
  "serde_json",
  "signet-core",
@@ -1913,8 +1915,10 @@ dependencies = [
 name = "signet-nostr"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "bitcoin",
  "nostr",
+ "serde_json",
  "thiserror",
 ]
 

@@ -58,7 +58,7 @@ orchestrator builds on.
 - [x] CP-3.1 NIP-98 event verification — `cargo test -p signet-nostr` — 2026-09-02
 - [x] CP-3.2 API-token issuance + verification — `cargo test -p signet-nostr` — 2026-09-02
 - [x] CP-3.3 Migrations create `Environment` + `ApiToken` (`npub_owner`, nullable `workspace_id`/`ttl`/`expires_at`) — `sqlx migrate run` then schema check — 2026-09-02
-- [ ] CP-3.4 Unauthenticated request rejected — missing/invalid NIP-98 returns `-32002`
+- [x] CP-3.4 Unauthenticated request rejected — missing/invalid NIP-98 returns `-32002` — 2026-09-03
 
 ## M4 — In-cluster core stack (substrate de-risk)
 

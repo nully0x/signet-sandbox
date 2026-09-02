@@ -1,17 +1,24 @@
 use std::fmt;
 use std::time::Duration;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use bitcoin::hashes::{Hash as _, sha256};
 use bitcoin::hex::{DisplayHex as _, FromHex as _};
 use bitcoin::secp256k1::rand::{RngCore, rngs::OsRng};
 use nostr::event::{Event, Kind};
 use nostr::key::PublicKey;
+use nostr::nips::nip19::ToBech32 as _;
 use nostr::types::Timestamp;
 use thiserror::Error;
 
 pub const NIP98_KIND: Kind = Kind::HttpAuth;
 
+pub const NIP98_SCHEME: &str = "Nostr";
+
 pub const TOKEN_PREFIX: &str = "sgn";
+
+pub const DEFAULT_MAX_AGE: Duration = Duration::from_secs(300);
 
 const TOKEN_SECRET_BYTES: usize = 32;
 
@@ -21,6 +28,8 @@ const MAX_FUTURE_SKEW: Duration = Duration::from_secs(60);
 pub enum Nip98Error {
     #[error("event id or signature verification failed")]
     BadEvent(#[from] nostr::error::Error),
+    #[error("malformed Authorization header")]
+    BadHeader,
     #[error("event is not a NIP-98 http auth event")]
     WrongKind,
     #[error("missing `{0}` tag")]
@@ -31,6 +40,26 @@ pub enum Nip98Error {
     MethodMismatch,
     #[error("`created_at` outside the acceptance window")]
     Stale,
+}
+
+pub fn parse_nip98_header(header: &str) -> Result<Event, Nip98Error> {
+    let payload = header
+        .strip_prefix(NIP98_SCHEME)
+        .and_then(|rest| rest.strip_prefix(' '))
+        .ok_or(Nip98Error::BadHeader)?;
+    let bytes = BASE64.decode(payload).map_err(|_| Nip98Error::BadHeader)?;
+    serde_json::from_slice(&bytes).map_err(|_| Nip98Error::BadHeader)
+}
+
+pub fn verify_nip98_header(
+    header: &str,
+    url: &str,
+    method: &str,
+    max_age: Duration,
+) -> Result<String, Nip98Error> {
+    let event = parse_nip98_header(header)?;
+    let pubkey = verify_http_auth(&event, url, method, Timestamp::now(), max_age)?;
+    Ok(pubkey.to_bech32().unwrap_or_else(|never| match never {}))
 }
 
 #[derive(Debug, Error)]
@@ -348,5 +377,49 @@ mod tests {
 
         let wrong = TokenHash::from_raw(ApiToken::generate().as_str());
         assert!(!wrong.matches(&stored));
+    }
+
+    fn nip98_header(event: &Event) -> String {
+        format!(
+            "{NIP98_SCHEME} {}",
+            BASE64.encode(serde_json::to_vec(event).unwrap())
+        )
+    }
+
+    #[test]
+    fn nip98_header_round_trips_to_npub() {
+        let keys = keys(2);
+        let header = nip98_header(&auth_event(&keys));
+        let npub = verify_nip98_header(&header, URL, "POST", MAX_AGE).unwrap();
+        assert_eq!(npub, keys.public_key().to_bech32().unwrap());
+    }
+
+    #[test]
+    fn nip98_header_rejects_garbage() {
+        for header in ["", "Nostr", "nostr abcd", "Nostr !!!not-base64!!!"] {
+            assert!(
+                verify_nip98_header(header, URL, "POST", MAX_AGE).is_err(),
+                "accepted {header:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn nip98_header_rejects_tampered_event() {
+        let keys = keys(3);
+        let event = auth_event(&keys);
+        let tampered = Event::new(
+            event.id,
+            event.pubkey,
+            event.created_at,
+            event.kind,
+            event.tags.to_vec(),
+            "tampered",
+            event.sig,
+        );
+        assert!(matches!(
+            verify_nip98_header(&nip98_header(&tampered), URL, "POST", MAX_AGE),
+            Err(Nip98Error::BadEvent(_))
+        ));
     }
 }
