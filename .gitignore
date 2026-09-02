@@ -1,0 +1,8 @@
+/target
+.env
+.direnv/
+result
+result-*
+*.sqlite
+*.sqlite-*
+/deploy/compose/bitcoin.conf

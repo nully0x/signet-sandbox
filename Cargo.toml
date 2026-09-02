@@ -1,0 +1,57 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.88"
+
+[workspace.dependencies]
+signet-bitcoind = { path = "crates/signet-bitcoind" }
+signet-core = { path = "crates/signet-core" }
+signet-db = { path = "crates/signet-db" }
+signet-nostr = { path = "crates/signet-nostr" }
+signet-rpc = { path = "crates/signet-rpc" }
+
+anyhow = "1"
+axum = "0.8"
+bitcoin = { version = "0.32", features = ["serde", "rand-std"] }
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive", "env"] }
+nostr = "0.45"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.9", features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "macros",
+    "migrate",
+    "chrono",
+    "uuid",
+] }
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.7", features = ["trace", "cors"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+
+[profile.release]
+lto = "thin"
+strip = "symbols"
+
+# The signer grinds SHA-256d against the signet target on every block even in
+# dev. Keep the crypto hot paths optimized so block production runs at full
+# speed, while the workspace crates stay on a fast debug compile.
+[profile.dev.package.bitcoin]
+opt-level = 3
+[profile.dev.package.bitcoin_hashes]
+opt-level = 3
+[profile.dev.package.secp256k1]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3

@@ -1,0 +1,23 @@
+[package]
+name = "signet-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+signet-core = { workspace = true }
+signet-db = { workspace = true }
+signet-nostr = { workspace = true }
+signet-rpc = { workspace = true }
+
+anyhow = { workspace = true }
+axum = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

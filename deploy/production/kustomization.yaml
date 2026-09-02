@@ -1,0 +1,11 @@
+# Production overlay for k3s on a VPS.
+# Same base manifests as deploy/dev; production differences live here:
+# registry images, resource sizing, ingress/TLS, backup jobs.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../dev
+images:
+  - name: signet-signer
+    newName: ghcr.io/signet-sandbox/signet-signer
+    newTag: latest

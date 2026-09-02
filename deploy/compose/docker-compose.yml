@@ -1,0 +1,36 @@
+services:
+  bitcoind:
+    image: bitcoin/bitcoin:29.4
+    volumes:
+      - bitcoind-data:/home/bitcoin/.bitcoin
+      - ./bitcoin.conf:/home/bitcoin/.bitcoin/bitcoin.conf
+    ports:
+      - "38332:38332"
+      - "38333:38333"
+    healthcheck:
+      test: ["CMD", "bitcoin-cli", "-signet", "-datadir=/home/bitcoin/.bitcoin", "getblockchaininfo"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      # Postgres 18+ image stores data in a versioned subdir under
+      # /var/lib/postgresql; mount the parent, not .../data.
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  bitcoind-data:
+  postgres-data:

@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: signet-signer
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: signet-signer
+  template:
+    metadata:
+      labels:
+        app: signet-signer
+    spec:
+      containers:
+        - name: signer
+          image: signet-signer:dev
+          imagePullPolicy: IfNotPresent
+          args: ["run"]
+          env:
+            - name: BITCOIN_RPC_URL
+              value: http://bitcoind:38332
+            - name: BITCOIN_RPC_USER
+              valueFrom:
+                secretKeyRef:
+                  name: signet-secrets
+                  key: BITCOIN_RPC_USER
+            - name: BITCOIN_RPC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: signet-secrets
+                  key: BITCOIN_RPC_PASSWORD
+            - name: SIGNER_KEY_WIF
+              valueFrom:
+                secretKeyRef:
+                  name: signet-secrets
+                  key: SIGNER_KEY_WIF
+            - name: SIGNER_INTERVAL_SECS
+              value: "30"
+            - name: SIGNER_PREMINE_BLOCKS
+              value: "101"
+            - name: SIGNER_WALLET
+              value: faucet
+            - name: RUST_LOG
+              value: info
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
