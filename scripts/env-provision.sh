@@ -43,8 +43,8 @@ if [[ "$CONTEXT" == k3d-* ]] && command -v k3d > /dev/null; then
 fi
 
 echo "==> applying core stack"
-kubectl apply -n "$NAMESPACE" -f deploy/dev/bitcoind.yaml
-kubectl apply -n "$NAMESPACE" -f deploy/dev/signer.yaml
+kubectl apply -n "$NAMESPACE" -f crates/signet-orchestrator/templates/bitcoind.yaml
+kubectl apply -n "$NAMESPACE" -f crates/signet-orchestrator/templates/signer.yaml
 
 echo "==> waiting for rollout"
 kubectl -n "$NAMESPACE" rollout status statefulset/bitcoind --timeout=300s

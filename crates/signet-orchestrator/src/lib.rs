@@ -7,8 +7,8 @@ use kube::{Client, Error};
 use serde::Deserialize;
 use serde_yaml::Value;
 
-const BITCOIND_MANIFEST: &str = include_str!("../../../deploy/dev/bitcoind.yaml");
-const SIGNER_MANIFEST: &str = include_str!("../../../deploy/dev/signer.yaml");
+const BITCOIND_MANIFEST: &str = include_str!("../templates/bitcoind.yaml");
+const SIGNER_MANIFEST: &str = include_str!("../templates/signer.yaml");
 
 const SECRET_NAME: &str = "signet-secrets";
 
