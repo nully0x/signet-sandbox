@@ -67,6 +67,13 @@ cluster-status:
 deploy-dev:
     bash scripts/deploy-dev.sh
 
+# provision an isolated per-env stack: env-<id> namespace + per-env key/challenge
+env-provision id:
+    bash scripts/env-provision.sh {{id}}
+
+env-destroy id:
+    kubectl delete namespace env-{{id}} --ignore-not-found
+
 deploy-dev-manifests:
     kubectl apply -k deploy/dev
 
