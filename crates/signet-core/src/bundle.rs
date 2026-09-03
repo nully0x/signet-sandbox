@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use crate::env::{BlockPolicy, EnvStatus};
 
@@ -30,6 +31,8 @@ pub struct ConnectionBundle {
     pub signet_challenge: String,
     pub block_policy: BlockPolicy,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub versions: Option<BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<DateTime<Utc>>,
 }
 
@@ -50,6 +53,7 @@ mod tests {
             lightning: None,
             signet_challenge: "5121030000ae".into(),
             block_policy: BlockPolicy::Interval30s,
+            versions: None,
             expires_at: None,
         }
     }
@@ -97,6 +101,23 @@ mod tests {
         assert_eq!(
             serde_json::to_value(BlockPolicy::OnDemand).unwrap(),
             serde_json::json!("on_demand")
+        );
+    }
+
+    #[test]
+    fn versions_omitted_when_unset_and_echoed_when_set() {
+        let json = serde_json::to_value(core_bundle()).unwrap();
+        assert!(!json.as_object().unwrap().contains_key("versions"));
+
+        let mut b = core_bundle();
+        b.versions = Some(BTreeMap::from([(
+            "bitcoind".to_string(),
+            "bitcoin/bitcoin:29.4".to_string(),
+        )]));
+        let json = serde_json::to_value(b).unwrap();
+        assert_eq!(
+            json["versions"]["bitcoind"],
+            serde_json::json!("bitcoin/bitcoin:29.4")
         );
     }
 }

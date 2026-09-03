@@ -20,7 +20,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 rpc_user: "signet".to_string(),
                 rpc_password: uuid::Uuid::new_v4().simple().to_string(),
             };
-            orchestrator.create_environment(&env_id, &secrets).await?;
+            orchestrator
+                .create_environment(
+                    &env_id,
+                    &secrets,
+                    &signet_orchestrator::resolve_images(&None).unwrap(),
+                )
+                .await?;
             println!("created env-{env_id} challenge={challenge}");
         }
         "destroy" => {

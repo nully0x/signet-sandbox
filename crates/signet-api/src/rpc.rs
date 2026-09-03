@@ -17,6 +17,7 @@ use signet_rpc::error::{
     ENV_NOT_FOUND, Error, FORBIDDEN, INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST, PARSE_ERROR,
     UNAUTHENTICATED,
 };
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
@@ -163,6 +164,8 @@ struct CreateParams {
     #[serde(default)]
     components: Components,
     #[serde(default)]
+    versions: Option<BTreeMap<String, String>>,
+    #[serde(default)]
     ttl_secs: Option<i64>,
 }
 
@@ -186,6 +189,12 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
         Ok(p) => p,
         Err(e) => return Response::error(Some(id), Error::new(INVALID_PARAMS, e.to_string())),
     };
+
+    let images = match signet_orchestrator::resolve_images(&params.versions) {
+        Ok(images) => images,
+        Err(e) => return Response::error(Some(id), Error::new(INVALID_PARAMS, e.to_string())),
+    };
+    let versions_json = serde_json::to_value(&images).ok();
 
     let env_id = Uuid::now_v7();
     let key = signet_signer::generate_key();
@@ -215,6 +224,7 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
         expires_at: params
             .ttl_secs
             .map(|s| Utc::now() + chrono::Duration::seconds(s)),
+        versions: versions_json,
     };
 
     let row = match signet_db::create_environment(&state.pool, &row).await {
@@ -230,7 +240,7 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
 
     if let Err(e) = state
         .orchestrator
-        .create_environment(&short_id(env_id), &secrets)
+        .create_environment(&short_id(env_id), &secrets, &images)
         .await
     {
         tracing::error!(error = %e, "environment provisioning failed");
@@ -397,6 +407,10 @@ fn bundle_for(
             "on_demand" => BlockPolicy::OnDemand,
             _ => BlockPolicy::Interval30s,
         },
+        versions: row
+            .versions
+            .as_ref()
+            .and_then(|v| serde_json::from_value(v.clone()).ok()),
         expires_at: row.expires_at,
     }
 }
@@ -535,10 +549,50 @@ mod tests {
             created_at: Utc::now(),
             expires_at: None,
             current_snapshot_id: None,
+            versions: None,
         };
         let json = serde_json::to_value(bundle_for(&row, EnvStatus::Provisioning, None)).unwrap();
-        for absent in ["indexer_url", "explorer_url", "faucet_url", "lightning"] {
+        for absent in [
+            "indexer_url",
+            "explorer_url",
+            "faucet_url",
+            "lightning",
+            "versions",
+        ] {
             assert!(!json.as_object().unwrap().contains_key(absent));
         }
+    }
+
+    #[test]
+    fn bundle_echoes_resolved_versions() {
+        let mut row = EnvironmentRow {
+            id: Uuid::now_v7(),
+            name: "x".into(),
+            npub_owner: "npub1x".into(),
+            workspace_id: None,
+            status: "ready".into(),
+            block_policy: "interval_30s".into(),
+            signet_challenge: "512100ae".into(),
+            component_explorer: false,
+            component_indexer: false,
+            component_faucet: false,
+            component_lightning: None,
+            rpc_endpoint: "http://x/rpc".into(),
+            indexer_endpoint: None,
+            explorer_endpoint: None,
+            faucet_endpoint: None,
+            ln_endpoint: None,
+            ttl_secs: None,
+            created_at: Utc::now(),
+            expires_at: None,
+            current_snapshot_id: None,
+            versions: None,
+        };
+        row.versions = Some(serde_json::json!({ "bitcoind": "bitcoin/bitcoin:28.1" }));
+        let json = serde_json::to_value(bundle_for(&row, EnvStatus::Ready, None)).unwrap();
+        assert_eq!(
+            json["versions"]["bitcoind"],
+            serde_json::json!("bitcoin/bitcoin:28.1")
+        );
     }
 }

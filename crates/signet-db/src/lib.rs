@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use serde_json::Value;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
@@ -38,6 +39,7 @@ pub struct EnvironmentRow {
     pub created_at: DateTime<Utc>,
     pub expires_at: Option<DateTime<Utc>>,
     pub current_snapshot_id: Option<Uuid>,
+    pub versions: Option<Value>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -58,6 +60,7 @@ pub struct NewEnvironment<'a> {
     pub rpc_endpoint: &'a str,
     pub ttl_secs: Option<i64>,
     pub expires_at: Option<DateTime<Utc>>,
+    pub versions: Option<Value>,
 }
 
 pub async fn create_environment(
@@ -69,9 +72,9 @@ pub async fn create_environment(
         insert into environments (
             id, name, npub_owner, status, block_policy, signet_challenge,
             component_explorer, component_indexer, component_faucet,
-            rpc_endpoint, ttl_secs, expires_at
+            rpc_endpoint, ttl_secs, expires_at, versions
         )
-        values ($1, $2, $3, 'provisioning', $4, $5, $6, $7, $8, $9, $10, $11)
+        values ($1, $2, $3, 'provisioning', $4, $5, $6, $7, $8, $9, $10, $11, $12)
         returning *
         "#,
     )
@@ -86,6 +89,7 @@ pub async fn create_environment(
     .bind(env.rpc_endpoint)
     .bind(env.ttl_secs)
     .bind(env.expires_at)
+    .bind(env.versions.clone())
     .fetch_one(pool)
     .await
     .map_err(DbError::from)

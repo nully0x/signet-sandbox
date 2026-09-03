@@ -52,9 +52,15 @@ Every environment is created from a **configuration** the team chooses at reques
     "indexer": true,                  // electrs/Fulcrum — required if explorer or lightning is true
     "faucet": true
   },
+  "versions": {                       // optional; absent keys use platform defaults
+    "bitcoind": "29.4",
+    "lnd": "0.19.2-beta"
+  },
   "ttl": null                         // null = always-on; set for CI/ephemeral use
 }
 ```
+
+**Component versions.** Teams pin third-party node versions (`bitcoind`, `electrs`, `explorer`, `lnd`) to reproduce bugs against specific releases. Values are **image tags only** — the platform owns the registry/repo mapping, so arbitrary image injection is impossible. The signer and faucet are platform components and are never user-versioned. Versions are fixed at creation (changing them mid-life is rejected rather than migrating a running chain), and the resolved image map is echoed in the connection bundle so CI runs can record exactly what they tested against.
 
 **Connection bundle (response):**
 ```json
@@ -74,6 +80,7 @@ Every environment is created from a **configuration** the team chooses at reques
   },
   "signet_challenge": "512103...ae",
   "block_policy": "interval_30s",
+  "versions": { "bitcoind": "bitcoin/bitcoin:29.4", "signer": "signet-signer:dev" },
   "expires_at": null
 }
 ```
