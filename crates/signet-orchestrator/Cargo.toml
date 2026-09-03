@@ -1,0 +1,19 @@
+[package]
+name = "signet-orchestrator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+k8s-openapi = { workspace = true }
+kube = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+signet-signer = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }

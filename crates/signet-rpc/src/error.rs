@@ -10,6 +10,7 @@ pub const INTERNAL_ERROR: i64 = -32603;
 pub const NOT_AVAILABLE_IN_PHASE: i64 = -32001;
 pub const UNAUTHENTICATED: i64 = -32002;
 pub const RATE_LIMITED: i64 = -32003;
+pub const FORBIDDEN: i64 = -32004;
 pub const ENV_NOT_FOUND: i64 = -32010;
 pub const INVALID_ADDRESS: i64 = -32020;
 pub const FAUCET_FAILED: i64 = -32021;
@@ -55,6 +56,7 @@ pub enum AppCode {
     NotAvailableInPhase,
     Unauthenticated,
     RateLimited,
+    Forbidden,
     EnvNotFound,
     InvalidAddress,
     FaucetFailed,
@@ -67,6 +69,7 @@ impl AppCode {
             AppCode::NotAvailableInPhase => NOT_AVAILABLE_IN_PHASE,
             AppCode::Unauthenticated => UNAUTHENTICATED,
             AppCode::RateLimited => RATE_LIMITED,
+            AppCode::Forbidden => FORBIDDEN,
             AppCode::EnvNotFound => ENV_NOT_FOUND,
             AppCode::InvalidAddress => INVALID_ADDRESS,
             AppCode::FaucetFailed => FAUCET_FAILED,
