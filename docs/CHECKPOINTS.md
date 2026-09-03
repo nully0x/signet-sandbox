@@ -65,10 +65,10 @@ orchestrator builds on.
 The k3s/kube-rs long pole. Port the single-tenant `deploy/dev` into a
 **per-environment template**.
 
-- [ ] CP-4.1 k3d cluster up — `just cluster-up && kubectl get nodes`
-- [ ] CP-4.2 Per-env core template (namespace + generated `signet-secrets` + bitcoind STS + signer Deployment) applies cleanly for one env
-- [ ] CP-4.3 In-cluster signer produces blocks — height increases ≥2 blocks/min over a 90s window
-- [ ] CP-4.4 Per-env signer key → distinct `signet_challenge` — two envs get different challenges
+- [x] CP-4.1 k3d cluster up — `just cluster-up && kubectl get nodes` — 2026-09-03
+- [x] CP-4.2 Per-env core template (namespace + generated `signet-secrets` + bitcoind STS + signer Deployment) applies cleanly for one env — 2026-09-03
+- [x] CP-4.3 In-cluster signer produces blocks — height increases ≥2 blocks/min over a 90s window — 2026-09-03 (101 → 104 in 90s)
+- [x] CP-4.4 Per-env signer key → distinct `signet_challenge` — two envs get different challenges — 2026-09-03 (env-alpha `512103c2af…` vs env-beta `512102394b…`, both chains producing)
 
 ## M5 — Orchestrator + create/get/destroy
 
@@ -87,6 +87,10 @@ Wires M3 (auth/db) + M4 (template) into the first real API methods.
 - [ ] CP-6.2 `environment.faucet` funds an address — tx visible in bitcoind mempool
 
 ## M7 — Indexer + explorer
+
+Ingress: **Gateway API** (`gateway.networking.k8s.io` — Gateway + HTTPRoute),
+served by k3s' bundled **Traefik**; no nginx-ingress, no classic Ingress
+resources. CP-7.3 routes ride the k3d LB port.
 
 - [ ] CP-7.1 electrs synced to signet tip — electrs height == bitcoind height
 - [ ] CP-7.2 btc-rpc-explorer serves — HTTP 200 and shows the latest block

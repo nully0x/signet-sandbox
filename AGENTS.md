@@ -33,6 +33,15 @@ Cluster (k3s): `just cluster-up / deploy-dev / cluster-status / logs-signer`.
 Gate discipline: every checkpoint in `docs/CHECKPOINTS.md` has a gate command.
 Never mark `[x]` without running its gate.
 
+Long-running or stateful commands (k3d/kubectl provisioning, docker builds,
+image imports, dev servers) are run by the user, not the agent: agent tool
+timeouts and aborts kill the whole process group mid-run and leave partial
+state behind (half-provisioned namespaces, dead servers). The agent may run
+quick, read-only or idempotent commands (`cargo test`, `kubectl get`, `psql`)
+directly; anything that keeps running or mutates cluster/docker state goes to
+the user — or, if agent-driven is unavoidable, launched via `setsid` with
+output redirected to a log and polled.
+
 ## Repo layout
 
 - `crates/signet-signer` — BIP325 block signer (keygen, block assembly, PoW grind)
@@ -59,7 +68,9 @@ Never mark `[x]` without running its gate.
 
 Git is owner-driven: the user performs all git operations, including commit.
 Agents never stage, commit, or push — at most they suggest a one-liner
-describing what was worked on.
+describing what was worked on. When a checkpoint gate passes, suggest its
+commit immediately, before moving to the next checkpoint — do not batch
+suggestions at milestone boundaries.
 
 Make incremental, atomic commits that each tell one part of the story. Every
 commit is authored by the repository owner — the repo-local
@@ -103,3 +114,20 @@ Lock files, generated files, and vendored code get their own commits.
    Always follow with `just dev-reset`.
 9. **Env loading:** justfile sets `dotenv-load := true`; clap args read env
    vars; docker-compose needs `--env-file .env` (the compose var includes it).
+10. **bitcoin/bitcoin:29 image must run as ROOT; never pass `-datadir` args.**
+    The entrypoint usermods/chowns and gosu's down itself — a pod-level
+    `securityContext` (uid 1000) makes it die with `usermod: cannot lock
+    /etc/passwd`. Passing `-datadir=X` as an arg is also wrong: the
+    entrypoint appends its own `-datadir=$BITCOIN_DATA` afterwards and the
+    LAST one wins. Set `BITCOIN_DATA=/bitcoin` env instead; it mkdirs, chowns
+    and uses that dir (image bitcoin user is uid 101).
+11. **k8s bitcoind conf needs `[signet]` for rpcbind/rpcallowip too** — same
+    rule as gotcha 4: network-scoped settings (`rpcbind`, `rpcallowip`,
+    `rpcuser`, `rpcpassword`) go under an appended `[signet]` header in
+    init-config; leaving them in base.conf's default section exits with
+    "Config setting for -rpcbind only applied on signet network when in
+    [signet] section."
+12. **STS rolling updates can wedge silently** — pod keeps the old
+    controller-revision-hash while updateRevision advances; rollout waits
+    forever. After changing a StatefulSet pod template, always
+    `kubectl delete pod <pod>` explicitly rather than trusting the auto-roll.
