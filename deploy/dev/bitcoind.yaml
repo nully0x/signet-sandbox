@@ -7,8 +7,6 @@ data:
     signet=1
     txindex=1
     server=1
-    rpcbind=0.0.0.0
-    rpcallowip=0.0.0.0/0
     fallbackfee=0.00001
     maxconnections=16
 ---
@@ -27,10 +25,6 @@ spec:
       labels:
         app: bitcoind
     spec:
-      securityContext:
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
       initContainers:
         - name: init-config
           image: bitcoin/bitcoin:29.4
@@ -40,6 +34,10 @@ spec:
               set -e
               cp /etc/bitcoin/base.conf /bitcoin/bitcoin.conf
               echo "signetchallenge=$SIGNET_CHALLENGE" >> /bitcoin/bitcoin.conf
+              echo "" >> /bitcoin/bitcoin.conf
+              echo "[signet]" >> /bitcoin/bitcoin.conf
+              echo "rpcbind=0.0.0.0" >> /bitcoin/bitcoin.conf
+              echo "rpcallowip=0.0.0.0/0" >> /bitcoin/bitcoin.conf
               echo "rpcuser=$BITCOIN_RPC_USER" >> /bitcoin/bitcoin.conf
               echo "rpcpassword=$BITCOIN_RPC_PASSWORD" >> /bitcoin/bitcoin.conf
           env:
@@ -66,7 +64,9 @@ spec:
       containers:
         - name: bitcoind
           image: bitcoin/bitcoin:29.4
-          args: ["-datadir=/bitcoin"]
+          env:
+            - name: BITCOIN_DATA
+              value: /bitcoin
           ports:
             - name: rpc
               containerPort: 38332
