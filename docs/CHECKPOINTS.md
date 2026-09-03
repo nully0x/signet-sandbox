@@ -74,12 +74,13 @@ The k3s/kube-rs long pole. Port the single-tenant `deploy/dev` into a
 
 Wires M3 (auth/db) + M4 (template) into the first real API methods.
 
-- [ ] CP-5.1 `kube-rs` creates an isolated `env-<id>` namespace — `kubectl get ns env-<id>`
-- [ ] CP-5.2 `environment.create` returns a real connection bundle (platform-generated challenge) — live RPC call
-- [ ] CP-5.3 Bundle omits disabled components — create with `indexer:false`, assert no `indexer_url` field
-- [ ] CP-5.4 `environment.get` round-trip — live RPC call
-- [ ] CP-5.5 `environment.destroy` cascades the namespace — `kubectl get ns env-<id>` gone
-- [ ] CP-5.6 Ownership enforced — a non-owner npub calling a mutating method is rejected
+- [x] CP-5.1 `kube-rs` creates an isolated `env-<id>` namespace — `kubectl get ns env-<id>` — 2026-09-03
+- [x] CP-5.2 `environment.create` returns a real connection bundle (platform-generated challenge) — live RPC call — 2026-09-03
+- [x] CP-5.3 Bundle omits disabled components — create with `indexer:false`, assert no `indexer_url` field — 2026-09-03
+- [x] CP-5.4 `environment.get` round-trip — live RPC call — 2026-09-03 (provisioning → ready via STS readiness)
+- [x] CP-5.5 `environment.destroy` cascades the namespace — `kubectl get ns env-<id>` gone — 2026-09-03
+- [x] CP-5.6 Ownership enforced — a non-owner npub calling a mutating method is rejected — 2026-09-03 (`-32004`)
+- [x] CP-5.7 Component `versions` map (PRD §5) — create with `{"versions":{"bitcoind":"29.4"}}` patches the STS image; absent keys use platform defaults; resolved map stored and echoed in the bundle — 2026-09-03 (`27.2` → `bitcoin/bitcoin:27.2` in the live STS; `nginx` → `-32602`)
 
 ## M6 — Faucet
 
@@ -96,6 +97,7 @@ resources. CP-7.3 routes ride the k3d LB port.
 - [ ] CP-7.2 btc-rpc-explorer serves — HTTP 200 and shows the latest block
 - [ ] CP-7.3 Ingress routes resolve — `/rpc`, `/electrs`, `/explorer` reachable via the k3d LB port
 - [ ] CP-7.4 `explorer_url` present and live in the bundle after `environment.create`
+- [ ] CP-7.5 Component versions (PRD §5) — `{"versions":{"electrs":...,"explorer":...}}` select the electrs/explorer images deployed per env; unknown component key rejected `-32602`
 
 ## M8 — TTL + reaper
 

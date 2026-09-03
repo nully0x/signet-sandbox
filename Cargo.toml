@@ -13,7 +13,9 @@ signet-bitcoind = { path = "crates/signet-bitcoind" }
 signet-core = { path = "crates/signet-core" }
 signet-db = { path = "crates/signet-db" }
 signet-nostr = { path = "crates/signet-nostr" }
+signet-orchestrator = { path = "crates/signet-orchestrator" }
 signet-rpc = { path = "crates/signet-rpc" }
+signet-signer = { path = "crates/signet-signer" }
 
 anyhow = "1"
 axum = "0.8"
@@ -21,9 +23,12 @@ base64 = "0.22"
 bitcoin = { version = "0.32", features = ["serde", "rand-std"] }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
+k8s-openapi = { version = "0.28", features = ["v1_32"] }
+kube = { version = "4", features = ["client", "derive", "rustls-tls"] }
 nostr = { version = "0.45", features = ["os-rng"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9"
 sqlx = { version = "0.9", features = [
     "runtime-tokio",
     "tls-rustls",

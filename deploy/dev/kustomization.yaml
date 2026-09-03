@@ -4,9 +4,3 @@ namespace: signet-platform
 resources:
   - namespace.yaml
   - postgres.yaml
-  - bitcoind.yaml
-  - signer.yaml
-images:
-  - name: signet-signer
-    newName: signet-signer
-    newTag: dev

@@ -33,8 +33,11 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let pool = signet_db::connect(&args.database_url).await?;
+    let orchestrator = signet_orchestrator::Orchestrator::connect()
+        .await
+        .map_err(|e| anyhow::anyhow!("kube client: {e}"))?;
 
-    let app = rpc::router(pool, args.public_url);
+    let app = rpc::router(pool, orchestrator, args.public_url);
 
     let listener = tokio::net::TcpListener::bind(args.listen).await?;
     tracing::info!(listen = %args.listen, "signet-api listening");

@@ -1,15 +1,14 @@
-mod signet;
+use signet_bitcoind::Client;
+use signet_signer::{generate_key, signet};
 
 use std::time::Duration;
 
 use anyhow::{Context, anyhow};
 use bitcoin::secp256k1::{Secp256k1, SecretKey};
-use bitcoin::{Network, PrivateKey, ScriptBuf};
+use bitcoin::{PrivateKey, ScriptBuf};
 use clap::{Parser, Subcommand};
 use serde_json::json;
 use tracing_subscriber::EnvFilter;
-
-use signet_bitcoind::Client;
 
 #[derive(Parser, Debug)]
 #[command(name = "signet-signer", about = "Signet block signing service")]
@@ -55,17 +54,13 @@ struct RunArgs {
 }
 
 fn keygen() -> anyhow::Result<()> {
-    let secp = Secp256k1::new();
-    let key = SecretKey::new(&mut bitcoin::secp256k1::rand::thread_rng());
-    let pubkey = key.public_key(&secp);
-    let challenge = signet::challenge_for_pubkey(&pubkey);
-    let wif = PrivateKey::new(key, Network::Testnet).to_wif();
+    let key = generate_key();
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
-            "signer_privkey_wif": wif,
-            "signer_pubkey": pubkey.to_string(),
-            "signet_challenge": challenge.to_hex_string(),
+            "signer_privkey_wif": key.wif,
+            "signer_pubkey": key.pubkey,
+            "signet_challenge": key.challenge,
         }))?
     );
     Ok(())
