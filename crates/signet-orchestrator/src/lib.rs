@@ -9,11 +9,13 @@ use serde_yaml::Value;
 
 const BITCOIND_MANIFEST: &str = include_str!("../templates/bitcoind.yaml");
 const SIGNER_MANIFEST: &str = include_str!("../templates/signer.yaml");
+const FAUCET_MANIFEST: &str = include_str!("../templates/faucet.yaml");
 
 const SECRET_NAME: &str = "signet-secrets";
 
 const DEFAULT_BITCOIND_IMAGE: &str = "bitcoin/bitcoin:29.4";
 const DEFAULT_SIGNER_IMAGE: &str = "signet-signer:dev";
+const DEFAULT_FAUCET_IMAGE: &str = "signet-faucet:dev";
 
 #[derive(Debug, thiserror::Error)]
 pub enum VersionError {
@@ -29,6 +31,7 @@ pub fn resolve_images(
     let mut images = BTreeMap::from([
         ("bitcoind".to_string(), DEFAULT_BITCOIND_IMAGE.to_string()),
         ("signer".to_string(), DEFAULT_SIGNER_IMAGE.to_string()),
+        ("faucet".to_string(), DEFAULT_FAUCET_IMAGE.to_string()),
     ]);
     let Some(tags) = tags else {
         return Ok(images);
@@ -115,6 +118,7 @@ impl Orchestrator {
         env_id: &str,
         secrets: &EnvSecrets,
         images: &BTreeMap<String, String>,
+        faucet: bool,
     ) -> Result<(), OrchestrateError> {
         let ns = namespace_for(env_id);
 
@@ -161,6 +165,9 @@ impl Orchestrator {
 
         self.apply_manifest(&ns, BITCOIND_MANIFEST, images).await?;
         self.apply_manifest(&ns, SIGNER_MANIFEST, images).await?;
+        if faucet {
+            self.apply_manifest(&ns, FAUCET_MANIFEST, images).await?;
+        }
         Ok(())
     }
 
@@ -205,14 +212,22 @@ impl Orchestrator {
         }
     }
 
+    fn split_docs(manifest: &str) -> Vec<String> {
+        manifest
+            .split("\n---")
+            .filter(|d| !d.trim().is_empty())
+            .map(|d| format!("{d}\n"))
+            .collect()
+    }
+
     async fn apply_manifest(
         &self,
         ns: &str,
         manifest: &str,
         images: &BTreeMap<String, String>,
     ) -> Result<(), OrchestrateError> {
-        for doc in manifest.split("\n---").filter(|d| !d.trim().is_empty()) {
-            let value: Value = serde_yaml::from_str(doc)?;
+        for doc in Self::split_docs(manifest) {
+            let value: Value = serde_yaml::from_str(&doc)?;
             let kind = value["kind"]
                 .as_str()
                 .ok_or_else(|| OrchestrateError::ManifestKind(doc.chars().take(40).collect()))?;
@@ -271,9 +286,9 @@ mod tests {
 
     #[test]
     fn manifests_parse_into_known_kinds() {
-        for manifest in [BITCOIND_MANIFEST, SIGNER_MANIFEST] {
-            for doc in manifest.split("\n---").filter(|d| !d.trim().is_empty()) {
-                let probe: ManifestProbe = serde_yaml::from_str(doc).unwrap();
+        for manifest in [BITCOIND_MANIFEST, SIGNER_MANIFEST, FAUCET_MANIFEST] {
+            for doc in Orchestrator::split_docs(manifest) {
+                let probe: ManifestProbe = serde_yaml::from_str(&doc).unwrap();
                 assert!(
                     matches!(
                         probe.kind.as_str(),
@@ -287,6 +302,17 @@ mod tests {
     }
 
     #[test]
+    fn split_docs_preserve_trailing_newlines() {
+        let docs = Orchestrator::split_docs(BITCOIND_MANIFEST);
+        let cm: ConfigMap = serde_yaml::from_str(&docs[0]).unwrap();
+        let conf = cm.data.unwrap().get("base.conf").unwrap().clone();
+        assert!(
+            conf.ends_with('\n'),
+            "base.conf lost its trailing newline; appended settings would glue onto the last line"
+        );
+    }
+
+    #[test]
     fn namespace_derivation_is_prefixed() {
         assert_eq!(namespace_for("9f2a1b"), "env-9f2a1b");
     }
@@ -296,6 +322,7 @@ mod tests {
         let images = resolve_images(&None).unwrap();
         assert_eq!(images.get("bitcoind").unwrap(), "bitcoin/bitcoin:29.4");
         assert_eq!(images.get("signer").unwrap(), "signet-signer:dev");
+        assert_eq!(images.get("faucet").unwrap(), "signet-faucet:dev");
     }
 
     #[test]
@@ -311,11 +338,16 @@ mod tests {
 
     #[test]
     fn resolve_images_rejects_unknown_component() {
-        let tags = Some(BTreeMap::from([("nginx".to_string(), "1.0".to_string())]));
-        assert!(matches!(
-            resolve_images(&tags),
-            Err(VersionError::UnknownComponent(_))
-        ));
+        for component in ["nginx", "faucet"] {
+            let tags = Some(BTreeMap::from([(component.to_string(), "1.0".to_string())]));
+            assert!(
+                matches!(
+                    resolve_images(&tags),
+                    Err(VersionError::UnknownComponent(_))
+                ),
+                "{component}"
+            );
+        }
     }
 
     #[test]

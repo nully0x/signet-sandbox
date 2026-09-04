@@ -240,7 +240,12 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
 
     if let Err(e) = state
         .orchestrator
-        .create_environment(&short_id(env_id), &secrets, &images)
+        .create_environment(
+            &short_id(env_id),
+            &secrets,
+            &images,
+            params.components.faucet,
+        )
         .await
     {
         tracing::error!(error = %e, "environment provisioning failed");

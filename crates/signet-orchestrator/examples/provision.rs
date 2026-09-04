@@ -11,6 +11,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let orchestrator = Orchestrator::connect().await?;
     match action.as_str() {
         "create" => {
+            let faucet = std::env::args().nth(3).as_deref() == Some("faucet");
             let key = signet_signer::generate_key();
             let challenge = key.challenge.clone();
             let secrets = EnvSecrets {
@@ -25,9 +26,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &env_id,
                     &secrets,
                     &signet_orchestrator::resolve_images(&None).unwrap(),
+                    faucet,
                 )
                 .await?;
-            println!("created env-{env_id} challenge={challenge}");
+            println!("created env-{env_id} challenge={challenge} faucet={faucet}");
         }
         "destroy" => {
             orchestrator.destroy_environment(&env_id).await?;
