@@ -212,12 +212,11 @@ impl Orchestrator {
         }
     }
 
-    fn split_docs(manifest: &str) -> Vec<String> {
-        manifest
-            .split("\n---")
-            .filter(|d| !d.trim().is_empty())
-            .map(|d| format!("{d}\n"))
-            .collect()
+    fn parse_docs(manifest: &str) -> Result<Vec<Value>, OrchestrateError> {
+        serde_yaml::Deserializer::from_str(manifest)
+            .map(Value::deserialize)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(OrchestrateError::Manifest)
     }
 
     async fn apply_manifest(
@@ -226,11 +225,11 @@ impl Orchestrator {
         manifest: &str,
         images: &BTreeMap<String, String>,
     ) -> Result<(), OrchestrateError> {
-        for doc in Self::split_docs(manifest) {
-            let value: Value = serde_yaml::from_str(&doc)?;
-            let kind = value["kind"]
-                .as_str()
-                .ok_or_else(|| OrchestrateError::ManifestKind(doc.chars().take(40).collect()))?;
+        for value in Self::parse_docs(manifest)? {
+            let kind = value["kind"].as_str().ok_or_else(|| {
+                let preview = serde_yaml::to_string(&value).unwrap_or_default();
+                OrchestrateError::ManifestKind(preview.chars().take(40).collect())
+            })?;
             match kind {
                 "ConfigMap" => {
                     let mut cm: ConfigMap = serde_yaml::from_value(value)?;
@@ -287,8 +286,8 @@ mod tests {
     #[test]
     fn manifests_parse_into_known_kinds() {
         for manifest in [BITCOIND_MANIFEST, SIGNER_MANIFEST, FAUCET_MANIFEST] {
-            for doc in Orchestrator::split_docs(manifest) {
-                let probe: ManifestProbe = serde_yaml::from_str(&doc).unwrap();
+            for value in Orchestrator::parse_docs(manifest).unwrap() {
+                let probe: ManifestProbe = serde_yaml::from_value(value).unwrap();
                 assert!(
                     matches!(
                         probe.kind.as_str(),
@@ -302,9 +301,9 @@ mod tests {
     }
 
     #[test]
-    fn split_docs_preserve_trailing_newlines() {
-        let docs = Orchestrator::split_docs(BITCOIND_MANIFEST);
-        let cm: ConfigMap = serde_yaml::from_str(&docs[0]).unwrap();
+    fn parsed_configmaps_keep_trailing_newlines() {
+        let docs = Orchestrator::parse_docs(BITCOIND_MANIFEST).unwrap();
+        let cm: ConfigMap = serde_yaml::from_value(docs[0].clone()).unwrap();
         let conf = cm.data.unwrap().get("base.conf").unwrap().clone();
         assert!(
             conf.ends_with('\n'),
