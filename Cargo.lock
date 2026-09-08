@@ -2499,6 +2499,7 @@ dependencies = [
  "serde_json",
  "signet-core",
  "signet-db",
+ "signet-faucet",
  "signet-nostr",
  "signet-orchestrator",
  "signet-rpc",
@@ -2545,6 +2546,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "signet-faucet"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "bitcoin",
+ "clap",
+ "serde",
+ "serde_json",
+ "signet-bitcoind",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "signet-nostr"
 version = "0.1.0"
 dependencies = [
@@ -2559,9 +2576,11 @@ dependencies = [
 name = "signet-orchestrator"
 version = "0.1.0"
 dependencies = [
+ "http",
  "k8s-openapi",
  "kube",
  "serde",
+ "serde_json",
  "serde_yaml",
  "signet-signer",
  "thiserror",

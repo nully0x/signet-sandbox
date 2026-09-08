@@ -51,7 +51,9 @@ output redirected to a log and polled.
 - `crates/signet-core` — Environment + ConnectionBundle types
 - `crates/signet-db` — sqlx PgPool + migrations
 - `crates/signet-nostr` — NIP-98 auth
-- `deploy/compose` — local dev stack; `deploy/dev` — k3s kustomize; `deploy/docker` — images
+- `deploy/compose` — local dev stack; `deploy/dev` — platform namespace only
+  (dev runs API/Postgres/orchestrator outside the cluster; in-cluster when
+  deployed); `deploy/docker` — images
 
 ## Conventions
 
@@ -131,3 +133,22 @@ Lock files, generated files, and vendored code get their own commits.
     controller-revision-hash while updateRevision advances; rollout waits
     forever. After changing a StatefulSet pod template, always
     `kubectl delete pod <pod>` explicitly rather than trusting the auto-roll.
+13. **Never split multi-doc YAML manually.** `split("\n---")` consumes the
+    `\n` before the separator, so a block scalar that ends a document
+    (`base.conf` in bitcoind.yaml) parsed WITHOUT its final newline. The
+    init script's first `echo >> bitcoin.conf` then glued
+    `signetchallenge=` onto `maxconnections=16`, Core fell back to the
+    DEFAULT (global) signet challenge, and nodes silently joined the public
+    signet chain — `blocks` climbed from peer sync, the signer logged
+    `challenge mismatch` every interval, wallet balance stayed 0. Fixed by
+    using serde_yaml's multi-document stream parser
+    (`Deserializer::from_str` → one `Value` per doc); the
+    `parsed_configmaps_keep_trailing_newlines` test guards it. If you ever
+    touch `Orchestrator::apply_manifest`, re-run that test. Diagnose
+    conf-glue with `kubectl exec … cat /bitcoin/bitcoin.conf` (and note
+    `jq -r` adds a newline of its own — don't trust it for byte checks).
+14. **`k3d image import` can silently no-op.** A "successful" import with
+    no INFO output may have imported nothing; the pod sits in
+    ErrImagePull. Verify inside the node before assuming:
+    `docker exec k3d-signet-server-0 crictl img | grep <image>`, then
+    `kubectl delete pod` to force a clean pull retry.

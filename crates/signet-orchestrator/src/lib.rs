@@ -9,11 +9,13 @@ use serde_yaml::Value;
 
 const BITCOIND_MANIFEST: &str = include_str!("../templates/bitcoind.yaml");
 const SIGNER_MANIFEST: &str = include_str!("../templates/signer.yaml");
+const FAUCET_MANIFEST: &str = include_str!("../templates/faucet.yaml");
 
 const SECRET_NAME: &str = "signet-secrets";
 
 const DEFAULT_BITCOIND_IMAGE: &str = "bitcoin/bitcoin:29.4";
 const DEFAULT_SIGNER_IMAGE: &str = "signet-signer:dev";
+const DEFAULT_FAUCET_IMAGE: &str = "signet-faucet:dev";
 
 #[derive(Debug, thiserror::Error)]
 pub enum VersionError {
@@ -29,6 +31,7 @@ pub fn resolve_images(
     let mut images = BTreeMap::from([
         ("bitcoind".to_string(), DEFAULT_BITCOIND_IMAGE.to_string()),
         ("signer".to_string(), DEFAULT_SIGNER_IMAGE.to_string()),
+        ("faucet".to_string(), DEFAULT_FAUCET_IMAGE.to_string()),
     ]);
     let Some(tags) = tags else {
         return Ok(images);
@@ -92,6 +95,23 @@ pub enum OrchestrateError {
     Manifest(#[from] serde_yaml::Error),
     #[error("manifest has no `kind`: {0}")]
     ManifestKind(String),
+    #[error("faucet: {0}")]
+    Faucet(String),
+}
+
+fn faucet_fund_request(
+    ns: &str,
+    address: &str,
+    amount_sat: u64,
+) -> Result<http::Request<Vec<u8>>, OrchestrateError> {
+    let uri = format!("/api/v1/namespaces/{ns}/services/http:faucet:8080/proxy/fund");
+    let body = serde_json::json!({ "address": address, "amount_sat": amount_sat });
+    http::Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(body.to_string().into_bytes())
+        .map_err(|e| OrchestrateError::Faucet(format!("request build failed: {e}")))
 }
 
 pub struct Orchestrator {
@@ -115,6 +135,7 @@ impl Orchestrator {
         env_id: &str,
         secrets: &EnvSecrets,
         images: &BTreeMap<String, String>,
+        faucet: bool,
     ) -> Result<(), OrchestrateError> {
         let ns = namespace_for(env_id);
 
@@ -161,6 +182,9 @@ impl Orchestrator {
 
         self.apply_manifest(&ns, BITCOIND_MANIFEST, images).await?;
         self.apply_manifest(&ns, SIGNER_MANIFEST, images).await?;
+        if faucet {
+            self.apply_manifest(&ns, FAUCET_MANIFEST, images).await?;
+        }
         Ok(())
     }
 
@@ -205,17 +229,42 @@ impl Orchestrator {
         }
     }
 
+    pub async fn faucet_fund(
+        &self,
+        env_id: &str,
+        address: &str,
+        amount_sat: u64,
+    ) -> Result<String, OrchestrateError> {
+        let ns = namespace_for(env_id);
+        let request = faucet_fund_request(&ns, address, amount_sat)?;
+        let text = self.client.request_text(request).await?;
+        let value: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| OrchestrateError::Faucet(format!("bad faucet response: {e}")))?;
+        let txid = value
+            .get("txid")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| OrchestrateError::Faucet("faucet response missing txid".to_string()))?;
+        Ok(txid.to_string())
+    }
+
+    fn parse_docs(manifest: &str) -> Result<Vec<Value>, OrchestrateError> {
+        serde_yaml::Deserializer::from_str(manifest)
+            .map(Value::deserialize)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(OrchestrateError::Manifest)
+    }
+
     async fn apply_manifest(
         &self,
         ns: &str,
         manifest: &str,
         images: &BTreeMap<String, String>,
     ) -> Result<(), OrchestrateError> {
-        for doc in manifest.split("\n---").filter(|d| !d.trim().is_empty()) {
-            let value: Value = serde_yaml::from_str(doc)?;
-            let kind = value["kind"]
-                .as_str()
-                .ok_or_else(|| OrchestrateError::ManifestKind(doc.chars().take(40).collect()))?;
+        for value in Self::parse_docs(manifest)? {
+            let kind = value["kind"].as_str().ok_or_else(|| {
+                let preview = serde_yaml::to_string(&value).unwrap_or_default();
+                OrchestrateError::ManifestKind(preview.chars().take(40).collect())
+            })?;
             match kind {
                 "ConfigMap" => {
                     let mut cm: ConfigMap = serde_yaml::from_value(value)?;
@@ -271,9 +320,9 @@ mod tests {
 
     #[test]
     fn manifests_parse_into_known_kinds() {
-        for manifest in [BITCOIND_MANIFEST, SIGNER_MANIFEST] {
-            for doc in manifest.split("\n---").filter(|d| !d.trim().is_empty()) {
-                let probe: ManifestProbe = serde_yaml::from_str(doc).unwrap();
+        for manifest in [BITCOIND_MANIFEST, SIGNER_MANIFEST, FAUCET_MANIFEST] {
+            for value in Orchestrator::parse_docs(manifest).unwrap() {
+                let probe: ManifestProbe = serde_yaml::from_value(value).unwrap();
                 assert!(
                     matches!(
                         probe.kind.as_str(),
@@ -287,8 +336,40 @@ mod tests {
     }
 
     #[test]
+    fn parsed_configmaps_keep_trailing_newlines() {
+        let docs = Orchestrator::parse_docs(BITCOIND_MANIFEST).unwrap();
+        let cm: ConfigMap = serde_yaml::from_value(docs[0].clone()).unwrap();
+        let conf = cm.data.unwrap().get("base.conf").unwrap().clone();
+        assert!(
+            conf.ends_with('\n'),
+            "base.conf lost its trailing newline; appended settings would glue onto the last line"
+        );
+    }
+
+    #[test]
     fn namespace_derivation_is_prefixed() {
         assert_eq!(namespace_for("9f2a1b"), "env-9f2a1b");
+    }
+
+    #[test]
+    fn faucet_fund_request_targets_service_proxy() {
+        let request = faucet_fund_request(
+            "env-abc123",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            5000,
+        )
+        .unwrap();
+        assert_eq!(request.method(), "POST");
+        assert_eq!(
+            request.uri(),
+            "/api/v1/namespaces/env-abc123/services/http:faucet:8080/proxy/fund"
+        );
+        let body: serde_json::Value = serde_json::from_slice(request.body()).unwrap();
+        assert_eq!(
+            body["address"],
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"
+        );
+        assert_eq!(body["amount_sat"], 5000);
     }
 
     #[test]
@@ -296,6 +377,7 @@ mod tests {
         let images = resolve_images(&None).unwrap();
         assert_eq!(images.get("bitcoind").unwrap(), "bitcoin/bitcoin:29.4");
         assert_eq!(images.get("signer").unwrap(), "signet-signer:dev");
+        assert_eq!(images.get("faucet").unwrap(), "signet-faucet:dev");
     }
 
     #[test]
@@ -311,11 +393,16 @@ mod tests {
 
     #[test]
     fn resolve_images_rejects_unknown_component() {
-        let tags = Some(BTreeMap::from([("nginx".to_string(), "1.0".to_string())]));
-        assert!(matches!(
-            resolve_images(&tags),
-            Err(VersionError::UnknownComponent(_))
-        ));
+        for component in ["nginx", "faucet"] {
+            let tags = Some(BTreeMap::from([(component.to_string(), "1.0".to_string())]));
+            assert!(
+                matches!(
+                    resolve_images(&tags),
+                    Err(VersionError::UnknownComponent(_))
+                ),
+                "{component}"
+            );
+        }
     }
 
     #[test]

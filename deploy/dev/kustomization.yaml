@@ -3,4 +3,7 @@ kind: Kustomization
 namespace: signet-platform
 resources:
   - namespace.yaml
-  - postgres.yaml
+# Dev runs the API, Postgres and orchestrator outside the cluster (compose
+# Postgres + native cargo). When the platform is deployed, the API, Postgres
+# and orchestrator run in-cluster in the signet-platform namespace — their
+# manifests land here.

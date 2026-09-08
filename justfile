@@ -1,7 +1,6 @@
 set dotenv-load := true
 
 cluster := "signet"
-namespace := "signet-platform"
 compose := "docker compose -f deploy/compose/docker-compose.yml --env-file .env"
 
 default:
@@ -79,18 +78,6 @@ deploy-dev-manifests:
 
 undeploy-dev:
     kubectl delete -k deploy/dev --ignore-not-found
-
-# wipe bitcoind chain state in k3s (needed if challenge changed)
-reset-chain:
-    kubectl -n {{namespace}} delete statefulset/bitcoind --ignore-not-found
-    kubectl -n {{namespace}} delete pvc data-bitcoind-0 --ignore-not-found
-    kubectl apply -k deploy/dev
-
-logs-signer:
-    kubectl -n {{namespace}} logs deploy/signet-signer -f
-
-logs-bitcoind:
-    kubectl -n {{namespace}} logs sts/bitcoind -f
 
 # --- production (deploy/production) ---
 

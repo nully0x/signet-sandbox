@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: faucet
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: faucet
+  template:
+    metadata:
+      labels:
+        app: faucet
+    spec:
+      containers:
+        - name: faucet
+          image: signet-faucet:dev
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: BITCOIN_RPC_URL
+              value: http://bitcoind:38332
+            - name: BITCOIN_RPC_USER
+              valueFrom:
+                secretKeyRef:
+                  name: signet-secrets
+                  key: BITCOIN_RPC_USER
+            - name: BITCOIN_RPC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: signet-secrets
+                  key: BITCOIN_RPC_PASSWORD
+            - name: FAUCET_LISTEN
+              value: "0.0.0.0:8080"
+            - name: RUST_LOG
+              value: info
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: faucet
+spec:
+  selector:
+    app: faucet
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
