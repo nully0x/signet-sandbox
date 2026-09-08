@@ -95,6 +95,23 @@ pub enum OrchestrateError {
     Manifest(#[from] serde_yaml::Error),
     #[error("manifest has no `kind`: {0}")]
     ManifestKind(String),
+    #[error("faucet: {0}")]
+    Faucet(String),
+}
+
+fn faucet_fund_request(
+    ns: &str,
+    address: &str,
+    amount_sat: u64,
+) -> Result<http::Request<Vec<u8>>, OrchestrateError> {
+    let uri = format!("/api/v1/namespaces/{ns}/services/http:faucet:8080/proxy/fund");
+    let body = serde_json::json!({ "address": address, "amount_sat": amount_sat });
+    http::Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(body.to_string().into_bytes())
+        .map_err(|e| OrchestrateError::Faucet(format!("request build failed: {e}")))
 }
 
 pub struct Orchestrator {
@@ -212,6 +229,24 @@ impl Orchestrator {
         }
     }
 
+    pub async fn faucet_fund(
+        &self,
+        env_id: &str,
+        address: &str,
+        amount_sat: u64,
+    ) -> Result<String, OrchestrateError> {
+        let ns = namespace_for(env_id);
+        let request = faucet_fund_request(&ns, address, amount_sat)?;
+        let text = self.client.request_text(request).await?;
+        let value: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| OrchestrateError::Faucet(format!("bad faucet response: {e}")))?;
+        let txid = value
+            .get("txid")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| OrchestrateError::Faucet("faucet response missing txid".to_string()))?;
+        Ok(txid.to_string())
+    }
+
     fn parse_docs(manifest: &str) -> Result<Vec<Value>, OrchestrateError> {
         serde_yaml::Deserializer::from_str(manifest)
             .map(Value::deserialize)
@@ -314,6 +349,27 @@ mod tests {
     #[test]
     fn namespace_derivation_is_prefixed() {
         assert_eq!(namespace_for("9f2a1b"), "env-9f2a1b");
+    }
+
+    #[test]
+    fn faucet_fund_request_targets_service_proxy() {
+        let request = faucet_fund_request(
+            "env-abc123",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            5000,
+        )
+        .unwrap();
+        assert_eq!(request.method(), "POST");
+        assert_eq!(
+            request.uri(),
+            "/api/v1/namespaces/env-abc123/services/http:faucet:8080/proxy/fund"
+        );
+        let body: serde_json::Value = serde_json::from_slice(request.body()).unwrap();
+        assert_eq!(
+            body["address"],
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"
+        );
+        assert_eq!(body["amount_sat"], 5000);
     }
 
     #[test]

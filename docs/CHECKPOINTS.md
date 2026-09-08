@@ -84,8 +84,8 @@ Wires M3 (auth/db) + M4 (template) into the first real API methods.
 
 ## M6 — Faucet
 
-- [ ] CP-6.1 Faucet minter service deployed per-env (spends from the matured premine)
-- [ ] CP-6.2 `environment.faucet` funds an address — tx visible in bitcoind mempool
+- [x] CP-6.1 Faucet minter service deployed per-env (spends from the matured premine) — `signet-faucet` crate deployed as per-env Deployment+Service when `components.faucet: true`; live: funded address, txid `acfc7965…`, tx in mempool — 2026-09-04
+- [x] CP-6.2 `environment.faucet` funds an address — tx visible in bitcoind mempool — owner-only funding via kube service-proxy to the per-env minter; live: txid `c272d904…` in mempool then confirmed; `-32004`/`-32020`/`-32001`/`-32021` paths exercised — 2026-09-04
 
 ## M7 — Indexer + explorer
 

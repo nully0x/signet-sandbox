@@ -14,8 +14,8 @@ use signet_nostr::{ApiToken, DEFAULT_MAX_AGE, verify_nip98_header};
 use signet_orchestrator::{EnvSecrets, Orchestrator};
 use signet_rpc::envelope::{Id, Request, Response};
 use signet_rpc::error::{
-    ENV_NOT_FOUND, Error, FORBIDDEN, INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST, PARSE_ERROR,
-    UNAUTHENTICATED,
+    ENV_NOT_FOUND, Error, FAUCET_FAILED, FORBIDDEN, INTERNAL_ERROR, INVALID_ADDRESS,
+    INVALID_PARAMS, INVALID_REQUEST, NOT_AVAILABLE_IN_PHASE, PARSE_ERROR, UNAUTHENTICATED,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -145,13 +145,7 @@ async fn handle(state: &AppState, caller: Caller, request: Request) -> Response 
         "environment.create" => environment_create(state, id, caller, request.params).await,
         "environment.get" => environment_get(state, id, request.params).await,
         "environment.destroy" => environment_destroy(state, id, caller, request.params).await,
-        "environment.faucet" => Response::error(
-            Some(id),
-            Error::new(
-                signet_rpc::error::NOT_AVAILABLE_IN_PHASE,
-                "method environment.faucet not yet implemented",
-            ),
-        ),
+        "environment.faucet" => environment_faucet(state, id, caller, request.params).await,
         _ => Response::error(Some(id), Error::method_not_found(&request.method)),
     }
 }
@@ -182,6 +176,13 @@ struct Components {
 #[derive(Deserialize)]
 struct IdParams {
     id: Uuid,
+}
+
+#[derive(Deserialize)]
+struct FaucetParams {
+    id: Uuid,
+    address: String,
+    amount_sat: u64,
 }
 
 async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Value) -> Response {
@@ -371,6 +372,76 @@ async fn environment_destroy(state: &AppState, id: Id, caller: Caller, params: V
     Response::result(Some(id), serde_json::json!({ "destroyed": true }))
 }
 
+async fn environment_faucet(state: &AppState, id: Id, caller: Caller, params: Value) -> Response {
+    let params: FaucetParams = match serde_json::from_value(params) {
+        Ok(p) => p,
+        Err(e) => return Response::error(Some(id), Error::new(INVALID_PARAMS, e.to_string())),
+    };
+
+    let row = match signet_db::get_environment(&state.pool, params.id).await {
+        Ok(Some(row)) => row,
+        Ok(None) => {
+            return Response::error(
+                Some(id),
+                Error::new(
+                    ENV_NOT_FOUND,
+                    format!("environment {} not found", params.id),
+                ),
+            );
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "environment lookup failed");
+            return Response::error(
+                Some(id),
+                Error::new(INTERNAL_ERROR, "environment lookup failed"),
+            );
+        }
+    };
+
+    if row.npub_owner != caller.npub {
+        return Response::error(
+            Some(id),
+            Error::new(FORBIDDEN, "caller is not the environment owner"),
+        );
+    }
+
+    if !row.component_faucet {
+        return Response::error(
+            Some(id),
+            Error::new(
+                NOT_AVAILABLE_IN_PHASE,
+                "environment has no faucet component",
+            ),
+        );
+    }
+
+    if row.status != "ready" {
+        return Response::error(
+            Some(id),
+            Error::new(
+                FAUCET_FAILED,
+                format!("environment is not ready (status: {})", row.status),
+            ),
+        );
+    }
+
+    if let Err(message) = signet_faucet::validate_signet_address(&params.address) {
+        return Response::error(Some(id), Error::new(INVALID_ADDRESS, message));
+    }
+
+    match state
+        .orchestrator
+        .faucet_fund(&short_id(row.id), &params.address, params.amount_sat)
+        .await
+    {
+        Ok(txid) => Response::result(Some(id), serde_json::json!({ "txid": txid })),
+        Err(e) => {
+            tracing::error!(error = %e, "faucet funding failed");
+            Response::error(Some(id), Error::new(FAUCET_FAILED, "faucet funding failed"))
+        }
+    }
+}
+
 fn short_id(env_id: Uuid) -> String {
     let simple = env_id.simple().to_string();
     simple[..12].to_string()
@@ -529,6 +600,41 @@ mod tests {
         assert_eq!(params.block_policy, None);
         assert!(!params.components.explorer);
         assert_eq!(params.ttl_secs, None);
+    }
+
+    #[test]
+    fn faucet_params_parse() {
+        let env_id = Uuid::now_v7();
+        let params: FaucetParams = serde_json::from_value(serde_json::json!({
+            "id": env_id,
+            "address": "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            "amount_sat": 1_000
+        }))
+        .unwrap();
+        assert_eq!(params.id, env_id);
+        assert_eq!(params.amount_sat, 1_000);
+
+        for incomplete in [
+            serde_json::json!({ "address": "tb1q", "amount_sat": 1 }),
+            serde_json::json!({ "id": env_id, "amount_sat": 1 }),
+            serde_json::json!({ "id": env_id, "address": "tb1q" }),
+        ] {
+            assert!(serde_json::from_value::<FaucetParams>(incomplete).is_err());
+        }
+    }
+
+    #[test]
+    fn invalid_signet_addresses_fail_validation() {
+        for raw in [
+            "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
+            "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2",
+            "not-an-address",
+        ] {
+            assert!(
+                signet_faucet::validate_signet_address(raw).is_err(),
+                "{raw}"
+            );
+        }
     }
 
     #[test]

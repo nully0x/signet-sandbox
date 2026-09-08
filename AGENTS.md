@@ -51,7 +51,9 @@ output redirected to a log and polled.
 - `crates/signet-core` — Environment + ConnectionBundle types
 - `crates/signet-db` — sqlx PgPool + migrations
 - `crates/signet-nostr` — NIP-98 auth
-- `deploy/compose` — local dev stack; `deploy/dev` — k3s kustomize; `deploy/docker` — images
+- `deploy/compose` — local dev stack; `deploy/dev` — platform namespace only
+  (dev runs API/Postgres/orchestrator outside the cluster; in-cluster when
+  deployed); `deploy/docker` — images
 
 ## Conventions
 

@@ -2499,6 +2499,7 @@ dependencies = [
  "serde_json",
  "signet-core",
  "signet-db",
+ "signet-faucet",
  "signet-nostr",
  "signet-orchestrator",
  "signet-rpc",
@@ -2575,9 +2576,11 @@ dependencies = [
 name = "signet-orchestrator"
 version = "0.1.0"
 dependencies = [
+ "http",
  "k8s-openapi",
  "kube",
  "serde",
+ "serde_json",
  "serde_yaml",
  "signet-signer",
  "thiserror",

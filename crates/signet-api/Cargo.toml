@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 signet-core = { workspace = true }
 signet-db = { workspace = true }
+signet-faucet = { workspace = true }
 signet-nostr = { workspace = true }
 signet-orchestrator = { workspace = true }
 signet-rpc = { workspace = true }
