@@ -93,7 +93,7 @@ Ingress: **Gateway API** (`gateway.networking.k8s.io` — Gateway + HTTPRoute),
 served by k3s' bundled **Traefik**; no nginx-ingress, no classic Ingress
 resources. CP-7.3 routes ride the k3d LB port.
 
-- [ ] CP-7.1 electrs synced to signet tip — electrs height == bitcoind height
+- [x] CP-7.1 electrs synced to signet tip — electrs height == bitcoind height — 2026-09-09 (electrs 0.11.1 via self-built `electrs:dev`; `chain updated height=105` == bitcoind 105, electrum `blockchain.headers.subscribe` served 106)
 - [ ] CP-7.2 btc-rpc-explorer serves — HTTP 200 and shows the latest block
 - [ ] CP-7.3 Ingress routes resolve — `/rpc`, `/electrs`, `/explorer` reachable via the k3d LB port
 - [ ] CP-7.4 `explorer_url` present and live in the bundle after `environment.create`

@@ -11,7 +11,7 @@ use signet_core::bundle::ConnectionBundle;
 use signet_core::env::{BlockPolicy, EnvStatus};
 use signet_db::{EnvironmentRow, PgPool};
 use signet_nostr::{ApiToken, DEFAULT_MAX_AGE, verify_nip98_header};
-use signet_orchestrator::{EnvSecrets, Orchestrator};
+use signet_orchestrator::{EnvComponents, EnvSecrets, Orchestrator};
 use signet_rpc::envelope::{Id, Request, Response};
 use signet_rpc::error::{
     ENV_NOT_FOUND, Error, FAUCET_FAILED, FORBIDDEN, INTERNAL_ERROR, INVALID_ADDRESS,
@@ -245,7 +245,10 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
             &short_id(env_id),
             &secrets,
             &images,
-            params.components.faucet,
+            EnvComponents {
+                indexer: params.components.indexer,
+                faucet: params.components.faucet,
+            },
         )
         .await
     {

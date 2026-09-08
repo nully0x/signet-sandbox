@@ -10,12 +10,20 @@ use serde_yaml::Value;
 const BITCOIND_MANIFEST: &str = include_str!("../templates/bitcoind.yaml");
 const SIGNER_MANIFEST: &str = include_str!("../templates/signer.yaml");
 const FAUCET_MANIFEST: &str = include_str!("../templates/faucet.yaml");
+const ELECTRS_MANIFEST: &str = include_str!("../templates/electrs.yaml");
 
 const SECRET_NAME: &str = "signet-secrets";
 
 const DEFAULT_BITCOIND_IMAGE: &str = "bitcoin/bitcoin:29.4";
 const DEFAULT_SIGNER_IMAGE: &str = "signet-signer:dev";
 const DEFAULT_FAUCET_IMAGE: &str = "signet-faucet:dev";
+const DEFAULT_ELECTRS_IMAGE: &str = "electrs:dev";
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EnvComponents {
+    pub indexer: bool,
+    pub faucet: bool,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum VersionError {
@@ -32,6 +40,7 @@ pub fn resolve_images(
         ("bitcoind".to_string(), DEFAULT_BITCOIND_IMAGE.to_string()),
         ("signer".to_string(), DEFAULT_SIGNER_IMAGE.to_string()),
         ("faucet".to_string(), DEFAULT_FAUCET_IMAGE.to_string()),
+        ("electrs".to_string(), DEFAULT_ELECTRS_IMAGE.to_string()),
     ]);
     let Some(tags) = tags else {
         return Ok(images);
@@ -54,7 +63,7 @@ pub fn resolve_images(
         let repo = match component.as_str() {
             "bitcoind" => "bitcoin/bitcoin",
             "lnd" => "lightninglabs/lnd",
-            "electrs" => "romanz/electrs",
+            "electrs" => "electrs",
             "explorer" => "bitcoinexplorer/btc-rpc-explorer",
             _ => unreachable!("validated above"),
         };
@@ -97,6 +106,46 @@ pub enum OrchestrateError {
     ManifestKind(String),
     #[error("faucet: {0}")]
     Faucet(String),
+    #[error("invalid signet challenge hex: {0}")]
+    BadChallenge(String),
+}
+
+fn decode_hex(s: &str) -> Option<Vec<u8>> {
+    if !s.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+        .collect()
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn write_compact_size(out: &mut Vec<u8>, len: usize) {
+    if len < 253 {
+        out.push(len as u8);
+    } else if len <= u16::MAX as usize {
+        out.push(253);
+        out.extend_from_slice(&(len as u16).to_le_bytes());
+    } else {
+        out.push(254);
+        out.extend_from_slice(&(len as u32).to_le_bytes());
+    }
+}
+
+fn signet_magic(challenge_hex: &str) -> Result<String, OrchestrateError> {
+    use sha2::{Digest, Sha256};
+    let challenge = decode_hex(challenge_hex)
+        .ok_or_else(|| OrchestrateError::BadChallenge(challenge_hex.into()))?;
+    let mut msg = Vec::with_capacity(challenge.len() + 9);
+    write_compact_size(&mut msg, challenge.len());
+    msg.extend_from_slice(&challenge);
+    let first = Sha256::digest(&msg);
+    let second = Sha256::digest(first);
+    Ok(encode_hex(&second[..4]))
 }
 
 fn faucet_fund_request(
@@ -135,7 +184,7 @@ impl Orchestrator {
         env_id: &str,
         secrets: &EnvSecrets,
         images: &BTreeMap<String, String>,
-        faucet: bool,
+        components: EnvComponents,
     ) -> Result<(), OrchestrateError> {
         let ns = namespace_for(env_id);
 
@@ -173,6 +222,14 @@ impl Orchestrator {
                     "BITCOIN_RPC_PASSWORD".to_string(),
                     secrets.rpc_password.clone(),
                 ),
+                (
+                    "BITCOIN_RPC_COOKIE".to_string(),
+                    format!("{}:{}", secrets.rpc_user, secrets.rpc_password),
+                ),
+                (
+                    "SIGNET_MAGIC".to_string(),
+                    signet_magic(&secrets.signet_challenge)?,
+                ),
             ])),
             ..Default::default()
         };
@@ -182,7 +239,10 @@ impl Orchestrator {
 
         self.apply_manifest(&ns, BITCOIND_MANIFEST, images).await?;
         self.apply_manifest(&ns, SIGNER_MANIFEST, images).await?;
-        if faucet {
+        if components.indexer {
+            self.apply_manifest(&ns, ELECTRS_MANIFEST, images).await?;
+        }
+        if components.faucet {
             self.apply_manifest(&ns, FAUCET_MANIFEST, images).await?;
         }
         Ok(())
@@ -320,7 +380,12 @@ mod tests {
 
     #[test]
     fn manifests_parse_into_known_kinds() {
-        for manifest in [BITCOIND_MANIFEST, SIGNER_MANIFEST, FAUCET_MANIFEST] {
+        for manifest in [
+            BITCOIND_MANIFEST,
+            SIGNER_MANIFEST,
+            FAUCET_MANIFEST,
+            ELECTRS_MANIFEST,
+        ] {
             for value in Orchestrator::parse_docs(manifest).unwrap() {
                 let probe: ManifestProbe = serde_yaml::from_value(value).unwrap();
                 assert!(
@@ -378,6 +443,105 @@ mod tests {
         assert_eq!(images.get("bitcoind").unwrap(), "bitcoin/bitcoin:29.4");
         assert_eq!(images.get("signer").unwrap(), "signet-signer:dev");
         assert_eq!(images.get("faucet").unwrap(), "signet-faucet:dev");
+        assert_eq!(images.get("electrs").unwrap(), "electrs:dev");
+    }
+
+    #[test]
+    fn electrs_container_reads_cookie_from_platform_secret() {
+        let docs = Orchestrator::parse_docs(ELECTRS_MANIFEST).unwrap();
+        let sts: StatefulSet = serde_yaml::from_value(docs[0].clone()).unwrap();
+        let pod = sts.spec.unwrap().template.spec.unwrap();
+        let container = &pod.containers[0];
+        assert_eq!(container.name, "electrs");
+        let env = container.env.as_ref().unwrap();
+        for name in [
+            "ELECTRS_NETWORK",
+            "ELECTRS_DB_DIR",
+            "ELECTRS_DAEMON_RPC_ADDR",
+            "ELECTRS_ELECTRUM_RPC_ADDR",
+            "ELECTRS_MAGIC",
+        ] {
+            assert!(env.iter().any(|e| e.name == name), "missing env var {name}");
+        }
+        let magic = env
+            .iter()
+            .find(|e| e.name == "ELECTRS_MAGIC")
+            .and_then(|e| e.value_from.as_ref())
+            .and_then(|v| v.secret_key_ref.as_ref())
+            .unwrap();
+        assert_eq!(magic.name, SECRET_NAME);
+        assert_eq!(magic.key, "SIGNET_MAGIC");
+        let cookie_volume = pod
+            .volumes
+            .as_ref()
+            .and_then(|v| {
+                v.iter().find(|v| {
+                    v.secret
+                        .as_ref()
+                        .and_then(|s| s.secret_name.as_deref())
+                        .is_some_and(|name| name == SECRET_NAME)
+                })
+            })
+            .expect("cookie volume mounts signet-secrets");
+        let mount = container
+            .volume_mounts
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|m| m.name == cookie_volume.name)
+            .expect("cookie volume is mounted");
+        assert_eq!(mount.mount_path, "/etc/electrs");
+        let args = container.command.as_ref().unwrap();
+        assert!(
+            args.iter()
+                .any(|a| a.contains("--cookie-file=/etc/electrs/cookie")),
+            "electrs must authenticate with the platform cookie file"
+        );
+    }
+
+    #[test]
+    fn signet_magic_matches_bitcoind_derivation() {
+        let challenge =
+            "51210266c545524adda007692aae987b5c192ceabf17b2bf52f0e38d3ad76a8c76c5ad51ae";
+        assert_eq!(
+            signet_magic(challenge).unwrap(),
+            "7b523e9e",
+            "magic must equal Core's `Signet derived magic (message start)` for the challenge"
+        );
+        assert!(matches!(
+            signet_magic("zz"),
+            Err(OrchestrateError::BadChallenge(_))
+        ));
+    }
+
+    #[test]
+    fn compact_size_encoding_matches_core() {
+        for (len, expected) in [
+            (0u64, vec![0u8]),
+            (252, vec![252]),
+            (253, vec![253, 253, 0]),
+            (65535, vec![253, 255, 255]),
+            (65536, vec![254, 0, 0, 1, 0]),
+        ] {
+            let mut out = Vec::new();
+            write_compact_size(&mut out, len as usize);
+            assert_eq!(out, expected, "len {len}");
+        }
+    }
+
+    #[test]
+    fn patch_images_renames_electrs_container_image() {
+        let mut containers = vec![k8s_openapi::api::core::v1::Container {
+            name: "electrs".into(),
+            ..Default::default()
+        }];
+        let images = resolve_images(&Some(BTreeMap::from([(
+            "electrs".to_string(),
+            "0.10.9".to_string(),
+        )])))
+        .unwrap();
+        patch_images(&mut containers, &images);
+        assert_eq!(containers[0].image.as_deref(), Some("electrs:0.10.9"));
     }
 
     #[test]

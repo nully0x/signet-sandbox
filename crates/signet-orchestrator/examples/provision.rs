@@ -1,17 +1,21 @@
-use signet_orchestrator::{EnvSecrets, Orchestrator};
+use signet_orchestrator::{EnvComponents, EnvSecrets, Orchestrator};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let action = args
         .next()
-        .expect("usage: provision <create|destroy|ready> <env-id>");
+        .expect("usage: provision <create|destroy|ready> <env-id> [faucet|indexer]");
     let env_id = args.next().expect("missing env id");
 
     let orchestrator = Orchestrator::connect().await?;
     match action.as_str() {
         "create" => {
-            let faucet = std::env::args().nth(3).as_deref() == Some("faucet");
+            let flags: Vec<String> = args.collect();
+            let components = EnvComponents {
+                indexer: flags.iter().any(|f| f == "indexer"),
+                faucet: flags.iter().any(|f| f == "faucet"),
+            };
             let key = signet_signer::generate_key();
             let challenge = key.challenge.clone();
             let secrets = EnvSecrets {
@@ -26,10 +30,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &env_id,
                     &secrets,
                     &signet_orchestrator::resolve_images(&None).unwrap(),
-                    faucet,
+                    components,
                 )
                 .await?;
-            println!("created env-{env_id} challenge={challenge} faucet={faucet}");
+            println!(
+                "created env-{env_id} challenge={challenge} indexer={} faucet={}",
+                components.indexer, components.faucet
+            );
         }
         "destroy" => {
             orchestrator.destroy_environment(&env_id).await?;
