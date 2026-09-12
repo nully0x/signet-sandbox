@@ -24,13 +24,15 @@ PUBKEY="$(echo "$KEYGEN_JSON" | jq -r .signer_pubkey)"
 echo "    challenge: $CHALLENGE"
 
 echo "==> creating namespace and signet-secrets"
+RPC_PASS="$(openssl rand -hex 16)"
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n "$NAMESPACE" create secret generic signet-secrets \
     --from-literal=SIGNER_KEY_WIF="$WIF" \
     --from-literal=SIGNET_CHALLENGE="$CHALLENGE" \
     --from-literal=SIGNER_PUBKEY="$PUBKEY" \
     --from-literal=BITCOIN_RPC_USER=signet \
-    --from-literal=BITCOIN_RPC_PASSWORD="$(openssl rand -hex 16)" \
+    --from-literal=BITCOIN_RPC_PASSWORD="$RPC_PASS" \
+    --from-literal=BITCOIN_RPC_COOKIE="signet:$RPC_PASS" \
     --dry-run=client -o yaml | kubectl apply -f -
 
 echo "==> ensuring signer image"

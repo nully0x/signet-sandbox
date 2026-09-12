@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: electrs
+spec:
+  serviceName: electrs
+  replicas: 1
+  selector:
+    matchLabels:
+      app: electrs
+  template:
+    metadata:
+      labels:
+        app: electrs
+    spec:
+      containers:
+        - name: electrs
+          image: electrs:dev
+          imagePullPolicy: IfNotPresent
+          command: ["electrs", "--cookie-file=/etc/electrs/cookie"]
+          env:
+            - name: ELECTRS_NETWORK
+              value: signet
+            - name: ELECTRS_DB_DIR
+              value: /data
+            - name: ELECTRS_DAEMON_RPC_ADDR
+              value: bitcoind:38332
+            - name: ELECTRS_DAEMON_P2P_ADDR
+              value: bitcoind:38333
+            - name: ELECTRS_ELECTRUM_RPC_ADDR
+              value: 0.0.0.0:60401
+            - name: ELECTRS_MAGIC
+              valueFrom:
+                secretKeyRef:
+                  name: signet-secrets
+                  key: SIGNET_MAGIC
+            - name: RUST_LOG
+              value: info
+          volumeMounts:
+            - name: rpc-cookie
+              mountPath: /etc/electrs
+              readOnly: true
+            - name: data
+              mountPath: /data
+          ports:
+            - name: electrum
+              containerPort: 60401
+          readinessProbe:
+            tcpSocket:
+              port: electrum
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+      volumes:
+        - name: rpc-cookie
+          secret:
+            secretName: signet-secrets
+            items:
+              - key: BITCOIN_RPC_COOKIE
+                path: cookie
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: electrs
+spec:
+  selector:
+    app: electrs
+  ports:
+    - name: electrum
+      port: 60401
+      targetPort: 60401

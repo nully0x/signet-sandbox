@@ -1,0 +1,18 @@
+ARG ELECTRS_VERSION=v0.11.1
+
+FROM debian:trixie-slim AS base
+RUN apt-get update -qqy
+RUN apt-get install -qqy librocksdb-dev curl
+
+FROM base AS electrs-build
+ARG ELECTRS_VERSION
+RUN apt-get install -qqy cargo build-essential libclang-dev git ca-certificates
+WORKDIR /build
+RUN git clone --branch ${ELECTRS_VERSION} --depth 1 https://github.com/romanz/electrs
+ENV ROCKSDB_INCLUDE_DIR=/usr/include
+ENV ROCKSDB_LIB_DIR=/usr/lib
+RUN cargo install --locked --path electrs
+
+FROM base AS result
+COPY --from=electrs-build /root/.cargo/bin/electrs /usr/bin/electrs
+WORKDIR /

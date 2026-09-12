@@ -152,3 +152,18 @@ Lock files, generated files, and vendored code get their own commits.
     ErrImagePull. Verify inside the node before assuming:
     `docker exec k3d-signet-server-0 crictl img | grep <image>`, then
     `kubectl delete pod` to force a clean pull retry.
+15. **electrs on a custom signet needs the per-env magic.** electrs
+    publishes NO official docker image — build `electrs:dev` from
+    `deploy/docker/Dockerfile.electrs` (pinned via `ELECTRS_VERSION` ARG,
+    re-declared INSIDE the build stage or the build-arg is empty) and
+    `k3d image import`. Upstream's Dockerfile has no ENTRYPOINT, so the
+    pod needs `command: ["electrs", "--cookie-file=…"]` or the container
+    exits 0 instantly (`Completed`). Signet p2p magic is derived from the
+    challenge: `sha256d(compactsize(challenge) || challenge)[0..4]`
+    (Core: kernel/chainparams.cpp); electrs assumes the DEFAULT signet
+    magic and its p2p task dies with "receiving on an empty and
+    disconnected channel" on mismatch — the orchestrator derives it into
+    `signet-secrets/SIGNET_MAGIC` and the electrs STS reads
+    `ELECTRS_MAGIC` from there. Auth is `--cookie-file` only (no inline
+    `--cookie` in 0.11+); sync is p2p-only (`--jsonrpc-import` was
+    removed; `ELECTRS_JSONRPC_IMPORT` is silently ignored).
