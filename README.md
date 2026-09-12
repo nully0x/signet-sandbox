@@ -73,15 +73,12 @@ nix develop
 just verify-all     # build + workspace tests — the bar for every change
 ```
 
-Pick up an unchecked checkpoint in `docs/CHECKPOINTS.md`, implement it, and
-make sure its gate command passes before opening a PR. Commits are small and
+Make sure `just verify-all` passes before opening a PR. Commits are small and
 atomic with conventional prefixes (`feat:`, `fix:`, `docs:`, …). Agent
 contributors have additional operational rules in `AGENTS.md`.
 
 ## Documentation
 
-- [`docs/SIGNET_SANDBOX_SPEC.md`](docs/SIGNET_SANDBOX_SPEC.md) — product specification
-- [`docs/CHECKPOINTS.md`](docs/CHECKPOINTS.md) — implementation checkpoints and verification gates
 - [`AGENTS.md`](AGENTS.md) — operational guide for coding agents
 
 ## License

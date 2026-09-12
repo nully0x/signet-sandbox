@@ -6,3 +6,4 @@ result-*
 *.sqlite
 *.sqlite-*
 /deploy/compose/bitcoin.conf
+
