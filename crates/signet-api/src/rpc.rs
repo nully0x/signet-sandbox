@@ -248,6 +248,7 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
             EnvComponents {
                 indexer: params.components.indexer,
                 faucet: params.components.faucet,
+                explorer: params.components.explorer,
             },
         )
         .await

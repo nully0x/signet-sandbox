@@ -11,6 +11,7 @@ const BITCOIND_MANIFEST: &str = include_str!("../templates/bitcoind.yaml");
 const SIGNER_MANIFEST: &str = include_str!("../templates/signer.yaml");
 const FAUCET_MANIFEST: &str = include_str!("../templates/faucet.yaml");
 const ELECTRS_MANIFEST: &str = include_str!("../templates/electrs.yaml");
+const EXPLORER_MANIFEST: &str = include_str!("../templates/explorer.yaml");
 
 const SECRET_NAME: &str = "signet-secrets";
 
@@ -21,6 +22,7 @@ const DEFAULT_SIGNER_IMAGE: &str = "signet-signer:dev";
 pub struct EnvComponents {
     pub indexer: bool,
     pub faucet: bool,
+    pub explorer: bool,
 }
 
 /// Optional per-env component. Adding a protocol is a new entry here plus a
@@ -62,6 +64,15 @@ pub const COMPONENTS: &[ComponentSpec] = &[
         deps: &[],
         versionable: false,
         requested: |c| c.faucet,
+    },
+    ComponentSpec {
+        key: "explorer",
+        manifest: EXPLORER_MANIFEST,
+        repo: "mempool/backend",
+        default_tag: "v3.3.1",
+        deps: &["electrs"],
+        versionable: true,
+        requested: |c| c.explorer,
     },
 ];
 
@@ -455,6 +466,7 @@ mod tests {
             SIGNER_MANIFEST,
             FAUCET_MANIFEST,
             ELECTRS_MANIFEST,
+            EXPLORER_MANIFEST,
         ] {
             for value in Orchestrator::parse_docs(manifest).unwrap() {
                 let probe: ManifestProbe = serde_yaml::from_value(value).unwrap();
@@ -515,6 +527,7 @@ mod tests {
             ("signer", "signet-signer:dev"),
             ("faucet", "signet-faucet:dev"),
             ("electrs", "electrs:dev"),
+            ("explorer", "mempool/backend:v3.3.1"),
         ] {
             assert_eq!(images.get(key).unwrap(), image, "{key}");
         }
@@ -525,12 +538,79 @@ mod tests {
         let none = EnvComponents::default();
         assert!(selected_specs(&none).is_empty());
 
+        let explorer_only = EnvComponents {
+            explorer: true,
+            ..Default::default()
+        };
+        let keys: Vec<_> = selected_specs(&explorer_only)
+            .iter()
+            .map(|s| s.key)
+            .collect();
+        assert_eq!(keys, vec!["electrs", "explorer"]);
+
         let faucet_only = EnvComponents {
             faucet: true,
             ..Default::default()
         };
         let keys: Vec<_> = selected_specs(&faucet_only).iter().map(|s| s.key).collect();
         assert_eq!(keys, vec!["faucet"]);
+    }
+
+    #[test]
+    fn explorer_deployment_wires_bitcoind_and_electrs() {
+        let docs = Orchestrator::parse_docs(EXPLORER_MANIFEST).unwrap();
+        let deployment: Deployment = serde_yaml::from_value(docs[0].clone()).unwrap();
+        let pod = deployment.spec.unwrap().template.spec.unwrap();
+        let container = &pod.containers[0];
+        assert_eq!(container.name, "explorer");
+        let env = container.env.as_ref().unwrap();
+        for (name, value) in [
+            ("MEMPOOL_NETWORK", "signet"),
+            ("MEMPOOL_BACKEND", "electrum"),
+            ("CORE_RPC_HOST", "bitcoind"),
+            ("ELECTRUM_HOST", "electrs"),
+            ("ELECTRUM_PORT", "60401"),
+            ("DATABASE_ENABLED", "false"),
+            ("STATISTICS_ENABLED", "false"),
+        ] {
+            assert!(
+                env.iter()
+                    .any(|e| e.name == name && e.value.as_deref() == Some(value)),
+                "{name}"
+            );
+        }
+        for (name, key) in [
+            ("CORE_RPC_USERNAME", "BITCOIN_RPC_USER"),
+            ("CORE_RPC_PASSWORD", "BITCOIN_RPC_PASSWORD"),
+        ] {
+            let secret_ref = env
+                .iter()
+                .find(|e| e.name == name)
+                .and_then(|e| e.value_from.as_ref())
+                .and_then(|v| v.secret_key_ref.as_ref())
+                .unwrap_or_else(|| panic!("{name} must come from the secret"));
+            assert_eq!(secret_ref.name, SECRET_NAME);
+            assert_eq!(secret_ref.key, key);
+        }
+        let web = &pod.containers[1];
+        assert_eq!(web.name, "explorer-web");
+        let web_env = web.env.as_ref().unwrap();
+        assert!(
+            web_env.iter().any(|e| e.name == "BACKEND_MAINNET_HTTP_HOST"
+                && e.value.as_deref() == Some("localhost"))
+        );
+
+        let probe = container
+            .readiness_probe
+            .as_ref()
+            .unwrap()
+            .http_get
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            probe.port,
+            k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::String("api".into())
+        );
     }
 
     #[test]
@@ -643,11 +723,13 @@ mod tests {
     }
 
     #[test]
-    fn resolve_images_versions_lnd_tag() {
+    fn resolve_images_versions_explorer_tag() {
         let tags = Some(BTreeMap::from([
+            ("explorer".to_string(), "v3.3.0".to_string()),
             ("lnd".to_string(), "0.18.5-beta".to_string()),
         ]));
         let images = resolve_images(&tags).unwrap();
+        assert_eq!(images.get("explorer").unwrap(), "mempool/backend:v3.3.0");
         assert_eq!(images.get("lnd").unwrap(), "lightninglabs/lnd:0.18.5-beta");
     }
 

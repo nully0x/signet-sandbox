@@ -94,7 +94,7 @@ served by k3s' bundled **Traefik**; no nginx-ingress, no classic Ingress
 resources. CP-7.3 routes ride the k3d LB port.
 
 - [x] CP-7.1 electrs synced to signet tip — electrs height == bitcoind height — 2026-09-09 (electrs 0.11.1 via self-built `electrs:dev`; `chain updated height=105` == bitcoind 105, electrum `blockchain.headers.subscribe` served 106)
-- [ ] CP-7.2 btc-rpc-explorer serves — HTTP 200 and shows the latest block
+- [x] CP-7.2 Explorer serves — HTTP 200 and shows the latest block — 2026-09-12 (mempool.space instead of btc-rpc-explorer — spec §210 allows either; official `mempool/backend`+`mempool/frontend` images avoid a source build. Live: frontend 200, `/api/v1/blocks` tracks the bitcoind tip at height 109)
 - [ ] CP-7.3 Ingress routes resolve — `/rpc`, `/electrs`, `/explorer` reachable via the k3d LB port
 - [ ] CP-7.4 `explorer_url` present and live in the bundle after `environment.create`
 - [ ] CP-7.5 Component versions (PRD §5) — `{"versions":{"electrs":...,"explorer":...}}` select the electrs/explorer images deployed per env; unknown component key rejected `-32602`
