@@ -16,13 +16,102 @@ const SECRET_NAME: &str = "signet-secrets";
 
 const DEFAULT_BITCOIND_IMAGE: &str = "bitcoin/bitcoin:29.4";
 const DEFAULT_SIGNER_IMAGE: &str = "signet-signer:dev";
-const DEFAULT_FAUCET_IMAGE: &str = "signet-faucet:dev";
-const DEFAULT_ELECTRS_IMAGE: &str = "electrs:dev";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EnvComponents {
     pub indexer: bool,
     pub faucet: bool,
+}
+
+/// Optional per-env component. Adding a protocol is a new entry here plus a
+/// template; the container name must equal `key` so image patching finds it.
+pub struct ComponentSpec {
+    pub key: &'static str,
+    pub manifest: &'static str,
+    pub repo: &'static str,
+    pub default_tag: &'static str,
+    /// Registry keys this component needs; auto-selected when a dependent is.
+    pub deps: &'static [&'static str],
+    /// Accepts a user image tag in the `versions` map.
+    pub versionable: bool,
+    pub requested: fn(&EnvComponents) -> bool,
+}
+
+impl ComponentSpec {
+    pub fn default_image(&self) -> String {
+        format!("{}:{}", self.repo, self.default_tag)
+    }
+}
+
+/// Order is dependency order: a selected component's deps appear before it.
+pub const COMPONENTS: &[ComponentSpec] = &[
+    ComponentSpec {
+        key: "electrs",
+        manifest: ELECTRS_MANIFEST,
+        repo: "electrs",
+        default_tag: "dev",
+        deps: &[],
+        versionable: true,
+        requested: |c| c.indexer,
+    },
+    ComponentSpec {
+        key: "faucet",
+        manifest: FAUCET_MANIFEST,
+        repo: "signet-faucet",
+        default_tag: "dev",
+        deps: &[],
+        versionable: false,
+        requested: |c| c.faucet,
+    },
+];
+
+fn selected_specs(components: &EnvComponents) -> Vec<&'static ComponentSpec> {
+    let mut wanted: Vec<&'static str> = COMPONENTS
+        .iter()
+        .filter(|s| (s.requested)(components))
+        .map(|s| s.key)
+        .collect();
+    let mut i = 0;
+    while i < wanted.len() {
+        let spec = COMPONENTS
+            .iter()
+            .find(|s| s.key == wanted[i])
+            .expect("selected key must exist in COMPONENTS");
+        for dep in spec.deps {
+            if !wanted.contains(dep) {
+                wanted.push(dep);
+            }
+        }
+        i += 1;
+    }
+    COMPONENTS
+        .iter()
+        .filter(|s| wanted.contains(&s.key))
+        .collect()
+}
+
+fn versionable_repo(key: &str) -> Option<&'static str> {
+    match key {
+        "bitcoind" => Some("bitcoin/bitcoin"),
+        // Versionable per spec §5, but deploys only in P3 (Lightning).
+        "lnd" => Some("lightninglabs/lnd"),
+        _ => COMPONENTS
+            .iter()
+            .find(|c| c.key == key && c.versionable)
+            .map(|c| c.repo),
+    }
+}
+
+fn validate_tag(tag: &str) -> Result<(), VersionError> {
+    if tag.is_empty()
+        || tag.len() > 64
+        || !tag
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        return Err(VersionError::BadTag(tag.to_string()));
+    }
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -39,33 +128,17 @@ pub fn resolve_images(
     let mut images = BTreeMap::from([
         ("bitcoind".to_string(), DEFAULT_BITCOIND_IMAGE.to_string()),
         ("signer".to_string(), DEFAULT_SIGNER_IMAGE.to_string()),
-        ("faucet".to_string(), DEFAULT_FAUCET_IMAGE.to_string()),
-        ("electrs".to_string(), DEFAULT_ELECTRS_IMAGE.to_string()),
     ]);
+    for spec in COMPONENTS {
+        images.insert(spec.key.to_string(), spec.default_image());
+    }
     let Some(tags) = tags else {
         return Ok(images);
     };
     for (component, tag) in tags {
-        if !matches!(
-            component.as_str(),
-            "bitcoind" | "electrs" | "explorer" | "lnd"
-        ) {
+        validate_tag(tag)?;
+        let Some(repo) = versionable_repo(component) else {
             return Err(VersionError::UnknownComponent(component.clone()));
-        }
-        if tag.is_empty()
-            || tag.len() > 64
-            || !tag
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-        {
-            return Err(VersionError::BadTag(tag.clone()));
-        }
-        let repo = match component.as_str() {
-            "bitcoind" => "bitcoin/bitcoin",
-            "lnd" => "lightninglabs/lnd",
-            "electrs" => "electrs",
-            "explorer" => "bitcoinexplorer/btc-rpc-explorer",
-            _ => unreachable!("validated above"),
         };
         images.insert(component.clone(), format!("{repo}:{tag}"));
     }
@@ -239,11 +312,8 @@ impl Orchestrator {
 
         self.apply_manifest(&ns, BITCOIND_MANIFEST, images).await?;
         self.apply_manifest(&ns, SIGNER_MANIFEST, images).await?;
-        if components.indexer {
-            self.apply_manifest(&ns, ELECTRS_MANIFEST, images).await?;
-        }
-        if components.faucet {
-            self.apply_manifest(&ns, FAUCET_MANIFEST, images).await?;
+        for spec in selected_specs(&components) {
+            self.apply_manifest(&ns, spec.manifest, images).await?;
         }
         Ok(())
     }
@@ -440,10 +510,27 @@ mod tests {
     #[test]
     fn resolve_images_defaults_without_request() {
         let images = resolve_images(&None).unwrap();
-        assert_eq!(images.get("bitcoind").unwrap(), "bitcoin/bitcoin:29.4");
-        assert_eq!(images.get("signer").unwrap(), "signet-signer:dev");
-        assert_eq!(images.get("faucet").unwrap(), "signet-faucet:dev");
-        assert_eq!(images.get("electrs").unwrap(), "electrs:dev");
+        for (key, image) in [
+            ("bitcoind", "bitcoin/bitcoin:29.4"),
+            ("signer", "signet-signer:dev"),
+            ("faucet", "signet-faucet:dev"),
+            ("electrs", "electrs:dev"),
+        ] {
+            assert_eq!(images.get(key).unwrap(), image, "{key}");
+        }
+    }
+
+    #[test]
+    fn selected_specs_resolve_dependency_order() {
+        let none = EnvComponents::default();
+        assert!(selected_specs(&none).is_empty());
+
+        let faucet_only = EnvComponents {
+            faucet: true,
+            ..Default::default()
+        };
+        let keys: Vec<_> = selected_specs(&faucet_only).iter().map(|s| s.key).collect();
+        assert_eq!(keys, vec!["faucet"]);
     }
 
     #[test]
@@ -556,8 +643,17 @@ mod tests {
     }
 
     #[test]
+    fn resolve_images_versions_lnd_tag() {
+        let tags = Some(BTreeMap::from([
+            ("lnd".to_string(), "0.18.5-beta".to_string()),
+        ]));
+        let images = resolve_images(&tags).unwrap();
+        assert_eq!(images.get("lnd").unwrap(), "lightninglabs/lnd:0.18.5-beta");
+    }
+
+    #[test]
     fn resolve_images_rejects_unknown_component() {
-        for component in ["nginx", "faucet"] {
+        for component in ["nginx", "faucet", "signer"] {
             let tags = Some(BTreeMap::from([(component.to_string(), "1.0".to_string())]));
             assert!(
                 matches!(
