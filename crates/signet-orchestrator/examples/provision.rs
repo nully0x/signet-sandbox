@@ -5,7 +5,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let action = args
         .next()
-        .expect("usage: provision <create|destroy|ready> <env-id> [faucet|indexer]");
+        .expect("usage: provision <create|destroy|ready> <env-id> [faucet|indexer|explorer]");
     let env_id = args.next().expect("missing env id");
 
     let orchestrator = Orchestrator::connect().await?;
@@ -15,6 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let components = EnvComponents {
                 indexer: flags.iter().any(|f| f == "indexer"),
                 faucet: flags.iter().any(|f| f == "faucet"),
+                explorer: flags.iter().any(|f| f == "explorer"),
             };
             let key = signet_signer::generate_key();
             let challenge = key.challenge.clone();
@@ -34,8 +35,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .await?;
             println!(
-                "created env-{env_id} challenge={challenge} indexer={} faucet={}",
-                components.indexer, components.faucet
+                "created env-{env_id} challenge={challenge} indexer={} faucet={} explorer={}",
+                components.indexer, components.faucet, components.explorer
             );
         }
         "destroy" => {

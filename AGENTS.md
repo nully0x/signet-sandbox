@@ -1,8 +1,6 @@
 # AGENTS.md
 
 Operational guide for coding agents working in this repo.
-Product spec: `docs/INITIAL.md` (v0.7). Build plan + verification gates:
-`docs/CHECKPOINTS.md`. Read both before starting work.
 
 ## Project
 
@@ -29,9 +27,6 @@ Local dev loop:
     just verify-all         # build + workspace tests — run before calling work done
 
 Cluster (k3s): `just cluster-up / deploy-dev / cluster-status / logs-signer`.
-
-Gate discipline: every checkpoint in `docs/CHECKPOINTS.md` has a gate command.
-Never mark `[x]` without running its gate.
 
 Long-running or stateful commands (k3d/kubectl provisioning, docker builds,
 image imports, dev servers) are run by the user, not the agent: agent tool
@@ -70,9 +65,8 @@ output redirected to a log and polled.
 
 Git is owner-driven: the user performs all git operations, including commit.
 Agents never stage, commit, or push — at most they suggest a one-liner
-describing what was worked on. When a checkpoint gate passes, suggest its
-commit immediately, before moving to the next checkpoint — do not batch
-suggestions at milestone boundaries.
+describing what was worked on, and commit only when the user explicitly
+instructs it.
 
 Make incremental, atomic commits that each tell one part of the story. Every
 commit is authored by the repository owner — the repo-local

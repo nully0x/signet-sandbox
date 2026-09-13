@@ -1,0 +1,103 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: explorer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: explorer
+  template:
+    metadata:
+      labels:
+        app: explorer
+    spec:
+      containers:
+        - name: explorer
+          image: mempool/backend:v3.3.1
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MEMPOOL_NETWORK
+              value: signet
+            - name: MEMPOOL_BACKEND
+              value: electrum
+            - name: CORE_RPC_HOST
+              value: bitcoind
+            - name: CORE_RPC_PORT
+              value: "38332"
+            - name: CORE_RPC_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: signet-secrets
+                  key: BITCOIN_RPC_USER
+            - name: CORE_RPC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: signet-secrets
+                  key: BITCOIN_RPC_PASSWORD
+            - name: ELECTRUM_HOST
+              value: electrs
+            - name: ELECTRUM_PORT
+              value: "60401"
+            - name: ELECTRUM_TLS_ENABLED
+              value: "false"
+            - name: DATABASE_ENABLED
+              value: "false"
+            - name: STATISTICS_ENABLED
+              value: "false"
+          ports:
+            - name: api
+              containerPort: 8999
+          readinessProbe:
+            httpGet:
+              path: /api/v1/blocks
+              port: api
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+        - name: explorer-web
+          image: mempool/frontend:v3.3.1
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: BACKEND_MAINNET_HTTP_HOST
+              value: localhost
+            - name: BACKEND_MAINNET_HTTP_PORT
+              value: "8999"
+            - name: FRONTEND_HTTP_PORT
+              value: "8080"
+            - name: SIGNET_ENABLED
+              value: "true"
+            - name: MAINNET_ENABLED
+              value: "false"
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: explorer
+spec:
+  selector:
+    app: explorer
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
