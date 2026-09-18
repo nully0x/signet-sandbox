@@ -58,6 +58,7 @@ pub struct NewEnvironment<'a> {
     pub component_indexer: bool,
     pub component_faucet: bool,
     pub rpc_endpoint: &'a str,
+    pub explorer_endpoint: Option<&'a str>,
     pub ttl_secs: Option<i64>,
     pub expires_at: Option<DateTime<Utc>>,
     pub versions: Option<Value>,
@@ -72,9 +73,9 @@ pub async fn create_environment(
         insert into environments (
             id, name, npub_owner, status, block_policy, signet_challenge,
             component_explorer, component_indexer, component_faucet,
-            rpc_endpoint, ttl_secs, expires_at, versions
+            rpc_endpoint, explorer_endpoint, ttl_secs, expires_at, versions
         )
-        values ($1, $2, $3, 'provisioning', $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        values ($1, $2, $3, 'provisioning', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         returning *
         "#,
     )
@@ -87,6 +88,7 @@ pub async fn create_environment(
     .bind(env.component_indexer)
     .bind(env.component_faucet)
     .bind(env.rpc_endpoint)
+    .bind(env.explorer_endpoint)
     .bind(env.ttl_secs)
     .bind(env.expires_at)
     .bind(env.versions.clone())

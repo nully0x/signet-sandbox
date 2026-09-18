@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use k8s_openapi::api::apps::v1::{Deployment, StatefulSet};
 use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Secret, Service};
 use kube::api::{Api, DeleteParams, ObjectMeta, PostParams};
+use kube::core::{ApiResource, DynamicObject};
 use kube::{Client, Error};
 use serde::Deserialize;
 use serde_yaml::Value;
@@ -12,8 +13,15 @@ const SIGNER_MANIFEST: &str = include_str!("../templates/signer.yaml");
 const FAUCET_MANIFEST: &str = include_str!("../templates/faucet.yaml");
 const ELECTRS_MANIFEST: &str = include_str!("../templates/electrs.yaml");
 const EXPLORER_MANIFEST: &str = include_str!("../templates/explorer.yaml");
+const HTTPROUTE_MANIFEST: &str = include_str!("../templates/httproute.yaml");
 
 const SECRET_NAME: &str = "signet-secrets";
+
+const GATEWAY_NAME: &str = "signet-gateway";
+const GATEWAY_NAMESPACE: &str = "signet-platform";
+// A Gateway listener port must equal a Traefik entrypoint port; k3s' chart
+// serves the `web` entrypoint on :8000 behind the Service's :80.
+const TRAEFIK_WEB_PORT: i32 = 8000;
 
 const DEFAULT_BITCOIND_IMAGE: &str = "bitcoin/bitcoin:29.4";
 const DEFAULT_SIGNER_IMAGE: &str = "signet-signer:dev";
@@ -247,20 +255,105 @@ fn faucet_fund_request(
         .map_err(|e| OrchestrateError::Faucet(format!("request build failed: {e}")))
 }
 
+fn explorer_hostname(env_host: &str, env_id: &str) -> String {
+    format!("env-{env_id}.{env_host}")
+}
+
+// `--env-host` accepts `[scheme://]host`; a bare host rides plain HTTP.
+fn split_url_base(base: &str) -> (String, String) {
+    match base.split_once("://") {
+        Some((scheme, host)) => (scheme.to_string(), host.to_string()),
+        None => ("http".to_string(), base.to_string()),
+    }
+}
+
+fn gateway_api(kind: &str, plural: &str) -> ApiResource {
+    ApiResource {
+        group: "gateway.networking.k8s.io".to_string(),
+        version: "v1".to_string(),
+        api_version: "gateway.networking.k8s.io/v1".to_string(),
+        kind: kind.to_string(),
+        plural: plural.to_string(),
+    }
+}
+
+// The bundled CRD serves ReferenceGrant only as v1beta1 (storage+preferred);
+// v1 routes would hit an unregistered path and get a plain-text 404.
+fn reference_grant_api() -> ApiResource {
+    ApiResource {
+        group: "gateway.networking.k8s.io".to_string(),
+        version: "v1beta1".to_string(),
+        api_version: "gateway.networking.k8s.io/v1beta1".to_string(),
+        kind: "ReferenceGrant".to_string(),
+        plural: "referencegrants".to_string(),
+    }
+}
+
+fn gateway_object() -> DynamicObject {
+    let mut gateway = DynamicObject::new(GATEWAY_NAME, &gateway_api("Gateway", "gateways"));
+    gateway.metadata.namespace = Some(GATEWAY_NAMESPACE.to_string());
+    gateway.data = serde_json::json!({
+        "spec": {
+            "gatewayClassName": "traefik",
+            "listeners": [{
+                "name": "http",
+                "protocol": "HTTP",
+                "port": TRAEFIK_WEB_PORT,
+                "allowedRoutes": { "namespaces": { "from": "All" } },
+            }],
+        }
+    });
+    gateway
+}
+
+fn route_grant_object(env_ns: &str) -> DynamicObject {
+    let mut grant = DynamicObject::new(env_ns, &reference_grant_api());
+    grant.metadata.namespace = Some(GATEWAY_NAMESPACE.to_string());
+    grant.data = serde_json::json!({
+        "spec": {
+            "from": [{
+                "group": "gateway.networking.k8s.io",
+                "kind": "HTTPRoute",
+                "namespace": env_ns,
+            }],
+            "to": [{ "group": "gateway.networking.k8s.io", "kind": "Gateway", "name": GATEWAY_NAME }],
+        }
+    });
+    grant
+}
+
+fn route_document(hostname: &str) -> Result<DynamicObject, OrchestrateError> {
+    let mut value = Orchestrator::parse_docs(HTTPROUTE_MANIFEST)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| OrchestrateError::ManifestKind("empty httproute template".into()))?;
+    value["spec"]["hostnames"] =
+        serde_yaml::Value::Sequence(vec![serde_yaml::Value::String(hostname.to_string())]);
+    Ok(serde_yaml::from_value(value)?)
+}
+
 pub struct Orchestrator {
     client: Client,
+    env_host: String,
+    url_scheme: String,
 }
 
 impl Orchestrator {
-    pub async fn connect() -> Result<Self, OrchestrateError> {
+    pub async fn connect(env_host: &str) -> Result<Self, OrchestrateError> {
+        let (url_scheme, host) = split_url_base(env_host);
         Ok(Self {
             client: Client::try_default().await?,
+            env_host: host,
+            url_scheme,
         })
     }
 
-    #[cfg(test)]
-    pub fn from_client(client: Client) -> Self {
-        Self { client }
+    pub fn explorer_url(&self, env_id: &str) -> String {
+        format!(
+            "{}://{}",
+            self.url_scheme,
+            explorer_hostname(&self.env_host, env_id)
+        )
     }
 
     pub async fn create_environment(
@@ -271,6 +364,8 @@ impl Orchestrator {
         components: EnvComponents,
     ) -> Result<(), OrchestrateError> {
         let ns = namespace_for(env_id);
+
+        self.ensure_gateway().await?;
 
         let namespace = Namespace {
             metadata: ObjectMeta {
@@ -321,10 +416,19 @@ impl Orchestrator {
             .create(&PostParams::default(), &secret)
             .await?;
 
-        self.apply_manifest(&ns, BITCOIND_MANIFEST, images).await?;
-        self.apply_manifest(&ns, SIGNER_MANIFEST, images).await?;
+        self.apply_manifest(&ns, BITCOIND_MANIFEST, images, None)
+            .await?;
+        self.apply_manifest(&ns, SIGNER_MANIFEST, images, None)
+            .await?;
         for spec in selected_specs(&components) {
-            self.apply_manifest(&ns, spec.manifest, images).await?;
+            self.apply_manifest(&ns, spec.manifest, images, None)
+                .await?;
+        }
+        if components.explorer {
+            let hostname = explorer_hostname(&self.env_host, env_id);
+            self.apply_manifest(&ns, HTTPROUTE_MANIFEST, images, Some(&hostname))
+                .await?;
+            self.ensure_route_grant(&ns).await?;
         }
         Ok(())
     }
@@ -334,6 +438,64 @@ impl Orchestrator {
         Api::<Namespace>::all(self.client.clone())
             .delete(&ns, &DeleteParams::default())
             .await?;
+        // The HTTPRoute dies with the namespace cascade. The ReferenceGrant
+        // lives in the Gateway namespace and is best-effort: a grant naming a
+        // deleted namespace authorizes nothing, so a failed cleanup must not
+        // mask the destroy.
+        let grants = Api::<DynamicObject>::namespaced_with(
+            self.client.clone(),
+            GATEWAY_NAMESPACE,
+            &reference_grant_api(),
+        );
+        if let Err(e) = grants.delete(&ns, &DeleteParams::default()).await
+            && !matches!(&e, Error::Api(status) if status.code == 404)
+        {
+            tracing::warn!(error = %e, env_ns = %ns, "ReferenceGrant cleanup failed");
+        }
+        Ok(())
+    }
+
+    async fn ensure_gateway(&self) -> Result<(), OrchestrateError> {
+        let namespaces = Api::<Namespace>::all(self.client.clone());
+        if namespaces.get_opt(GATEWAY_NAMESPACE).await?.is_none() {
+            namespaces
+                .create(
+                    &PostParams::default(),
+                    &Namespace {
+                        metadata: ObjectMeta {
+                            name: Some(GATEWAY_NAMESPACE.to_string()),
+                            ..Default::default()
+                        },
+                        spec: None,
+                        status: None,
+                    },
+                )
+                .await?;
+        }
+        let gateways = Api::<DynamicObject>::namespaced_with(
+            self.client.clone(),
+            GATEWAY_NAMESPACE,
+            &gateway_api("Gateway", "gateways"),
+        );
+        if gateways.get_opt(GATEWAY_NAME).await?.is_none() {
+            gateways
+                .create(&PostParams::default(), &gateway_object())
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn ensure_route_grant(&self, env_ns: &str) -> Result<(), OrchestrateError> {
+        let grants = Api::<DynamicObject>::namespaced_with(
+            self.client.clone(),
+            GATEWAY_NAMESPACE,
+            &reference_grant_api(),
+        );
+        if grants.get_opt(env_ns).await?.is_none() {
+            grants
+                .create(&PostParams::default(), &route_grant_object(env_ns))
+                .await?;
+        }
         Ok(())
     }
 
@@ -400,6 +562,7 @@ impl Orchestrator {
         ns: &str,
         manifest: &str,
         images: &BTreeMap<String, String>,
+        route_hostname: Option<&str>,
     ) -> Result<(), OrchestrateError> {
         for value in Self::parse_docs(manifest)? {
             let kind = value["kind"].as_str().ok_or_else(|| {
@@ -441,6 +604,22 @@ impl Orchestrator {
                         .create(&PostParams::default(), &dep)
                         .await?;
                 }
+                "HTTPRoute" => {
+                    let Some(hostname) = route_hostname else {
+                        return Err(OrchestrateError::ManifestKind(
+                            "HTTPRoute requires a route hostname".to_string(),
+                        ));
+                    };
+                    let mut route = route_document(hostname)?;
+                    route.metadata.namespace = Some(ns.to_string());
+                    Api::<DynamicObject>::namespaced_with(
+                        self.client.clone(),
+                        ns,
+                        &gateway_api("HTTPRoute", "httproutes"),
+                    )
+                    .create(&PostParams::default(), &route)
+                    .await?;
+                }
                 other => {
                     return Err(OrchestrateError::ManifestKind(other.to_string()));
                 }
@@ -467,13 +646,14 @@ mod tests {
             FAUCET_MANIFEST,
             ELECTRS_MANIFEST,
             EXPLORER_MANIFEST,
+            HTTPROUTE_MANIFEST,
         ] {
             for value in Orchestrator::parse_docs(manifest).unwrap() {
                 let probe: ManifestProbe = serde_yaml::from_value(value).unwrap();
                 assert!(
                     matches!(
                         probe.kind.as_str(),
-                        "ConfigMap" | "StatefulSet" | "Service" | "Deployment"
+                        "ConfigMap" | "StatefulSet" | "Service" | "Deployment" | "HTTPRoute"
                     ),
                     "unexpected kind {}",
                     probe.kind
@@ -756,5 +936,66 @@ mod tests {
                 "{tag:?}"
             );
         }
+    }
+
+    #[test]
+    fn explorer_hostname_routes_the_env_subdomain() {
+        assert_eq!(
+            explorer_hostname("localhost", "9f2a1b"),
+            "env-9f2a1b.localhost"
+        );
+        assert_eq!(
+            explorer_hostname("sandbox.signet.dev", "9f2a1b"),
+            "env-9f2a1b.sandbox.signet.dev"
+        );
+    }
+
+    #[test]
+    fn split_url_base_schemes_the_env_host() {
+        assert_eq!(
+            split_url_base("localhost"),
+            ("http".to_string(), "localhost".to_string())
+        );
+        assert_eq!(
+            split_url_base("https://sandbox.signet.dev"),
+            ("https".to_string(), "sandbox.signet.dev".to_string())
+        );
+    }
+
+    #[test]
+    fn gateway_object_allows_routes_from_every_namespace() {
+        let gateway = serde_json::to_value(gateway_object()).unwrap();
+        assert_eq!(gateway["metadata"]["name"], GATEWAY_NAME);
+        assert_eq!(gateway["spec"]["gatewayClassName"], "traefik");
+        let listener = &gateway["spec"]["listeners"][0];
+        assert_eq!(listener["port"], TRAEFIK_WEB_PORT);
+        assert_eq!(listener["allowedRoutes"]["namespaces"]["from"], "All");
+    }
+
+    #[test]
+    fn route_grant_bridges_the_env_namespace_to_the_gateway() {
+        let grant = serde_json::to_value(route_grant_object("env-abc123")).unwrap();
+        assert_eq!(grant["metadata"]["namespace"], GATEWAY_NAMESPACE);
+        assert_eq!(grant["metadata"]["name"], "env-abc123");
+        assert_eq!(grant["spec"]["from"][0]["kind"], "HTTPRoute");
+        assert_eq!(grant["spec"]["from"][0]["namespace"], "env-abc123");
+        assert_eq!(grant["spec"]["to"][0]["kind"], "Gateway");
+        assert_eq!(grant["spec"]["to"][0]["name"], GATEWAY_NAME);
+    }
+
+    #[test]
+    fn route_document_patches_hostname_and_targets_explorer() {
+        let route = route_document("env-abc123.localhost").unwrap();
+        assert_eq!(route.types.as_ref().unwrap().kind.as_str(), "HTTPRoute");
+        assert_eq!(route.data["spec"]["hostnames"][0], "env-abc123.localhost");
+        assert_eq!(route.data["spec"]["parentRefs"][0]["name"], GATEWAY_NAME);
+        assert_eq!(
+            route.data["spec"]["parentRefs"][0]["namespace"],
+            GATEWAY_NAMESPACE
+        );
+        assert_eq!(
+            route.data["spec"]["rules"][0]["backendRefs"][0]["name"],
+            "explorer"
+        );
     }
 }

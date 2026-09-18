@@ -1,0 +1,13 @@
+# Turns on Traefik's Gateway API provider in the k3s bundled chart.
+# The Gateway API CRDs are installed by `just cluster-up` (pinned standard
+# install); the platform Gateway itself is ensured by the orchestrator.
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    providers:
+      kubernetesGateway:
+        enabled: true

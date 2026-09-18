@@ -8,7 +8,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("usage: provision <create|destroy|ready> <env-id> [faucet|indexer|explorer]");
     let env_id = args.next().expect("missing env id");
 
-    let orchestrator = Orchestrator::connect().await?;
+    let env_host = std::env::var("SIGNET_ENV_HOST").unwrap_or_else(|_| "localhost".into());
+    let orchestrator = Orchestrator::connect(&env_host).await?;
     match action.as_str() {
         "create" => {
             let flags: Vec<String> = args.collect();

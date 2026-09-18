@@ -161,3 +161,14 @@ Lock files, generated files, and vendored code get their own commits.
     `ELECTRS_MAGIC` from there. Auth is `--cookie-file` only (no inline
     `--cookie` in 0.11+); sync is p2p-only (`--jsonrpc-import` was
     removed; `ELECTRS_JSONRPC_IMPORT` is silently ignored).
+16. **Gateway coexistence and klipper host ports.** Envoy Gateway is the
+    edge (see docs/GATEWAY.md); Traefik coexists until the cluster
+    recreate. Two LoadBalancer Services claiming host port 80 on one node
+    cannot coexist: the second service's klipper `svclb` pod goes Pending
+    with "didn't have free ports for the requested pod ports" — diagnose
+    via `kubectl describe pod` on the svclb pod; service events do not
+    show it. EG 1.2.x does not self-create its GatewayClass, and the
+    Envoy data plane deploys into `envoy-gateway-system`, not the
+    Gateway's namespace. EG ships its own gateway-api CRDs (supersede the
+    manual standard install). Multi-node production requires MetalLB —
+    klipper has no VIP or failover.

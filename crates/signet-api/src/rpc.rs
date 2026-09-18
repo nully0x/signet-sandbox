@@ -211,6 +211,10 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
     };
 
     let rpc_endpoint = format!("{}/env/{env_id}/rpc", state.public_url);
+    let explorer_endpoint = params
+        .components
+        .explorer
+        .then(|| state.orchestrator.explorer_url(&short_id(env_id)));
     let row = signet_db::NewEnvironment {
         id: env_id,
         name: &params.name,
@@ -221,6 +225,7 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
         component_indexer: params.components.indexer,
         component_faucet: params.components.faucet,
         rpc_endpoint: &rpc_endpoint,
+        explorer_endpoint: explorer_endpoint.as_deref(),
         ttl_secs: params.ttl_secs,
         expires_at: params
             .ttl_secs
@@ -505,8 +510,8 @@ mod tests {
     use nostr::nips::nip19::ToBech32 as _;
     use nostr::types::Timestamp;
 
-    const PUBLIC_URL: &str = "http://localhost:8080";
-    const RPC_URL: &str = "http://localhost:8080/v1/rpc";
+    const PUBLIC_URL: &str = "http://localhost:8081";
+    const RPC_URL: &str = "http://localhost:8081/v1/rpc";
 
     fn auth_header(keys: &Keys, url: &str, method: &str) -> String {
         let event = EventBuilder::new(Kind::HttpAuth, "")

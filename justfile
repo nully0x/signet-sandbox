@@ -47,6 +47,8 @@ check:
 
 # --- k3s dev cluster (deploy/dev) ---
 
+gateway_api_crds := "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml"
+
 cluster-up:
     k3d cluster create {{cluster}} \
         --port "80:80@loadbalancer" \
@@ -54,6 +56,10 @@ cluster-up:
         --volume signet-data:/var/lib/rancher/k3s/storage@server:0 \
         --wait
     k3d kubeconfig write {{cluster}}
+    kubectl apply -f {{gateway_api_crds}}
+    kubectl apply -f deploy/dev/traefik-gateway-config.yaml
+    kubectl -n kube-system rollout status deploy/traefik --timeout=180s
+    kubectl wait --for=condition=accepted gatewayclass/traefik --timeout=120s
 
 cluster-down:
     k3d cluster delete {{cluster}}
