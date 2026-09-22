@@ -1,6 +1,11 @@
 set dotenv-load := true
 
 cluster := "signet"
+# Container runtime: docker if present, else the rootless podman socket
+# (k3d speaks the docker API; K3D_FIX_DNS works around rootless podman DNS).
+sock := `if command -v docker >/dev/null 2>&1; then echo none; else echo "unix:///run/user/$(id -u)/podman/podman.sock"; fi`
+export DOCKER_HOST := if sock == "none" { "" } else { sock }
+export K3D_FIX_DNS := if sock == "none" { "0" } else { "1" }
 compose := "docker compose -f deploy/compose/docker-compose.yml --env-file .env"
 
 default:
@@ -53,6 +58,7 @@ cluster-up:
     k3d cluster create {{cluster}} \
         --port "80:80@loadbalancer" \
         --port "443:443@loadbalancer" \
+        --port "50002:50002@loadbalancer" \
         --volume signet-data:/var/lib/rancher/k3s/storage@server:0 \
         --wait
     k3d kubeconfig write {{cluster}}
