@@ -33,6 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &secrets,
                     &signet_orchestrator::resolve_images(&None).unwrap(),
                     components,
+                    None,
                 )
                 .await?;
             println!(

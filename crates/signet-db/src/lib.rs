@@ -59,6 +59,8 @@ pub struct NewEnvironment<'a> {
     pub component_faucet: bool,
     pub rpc_endpoint: &'a str,
     pub explorer_endpoint: Option<&'a str>,
+    pub indexer_endpoint: Option<&'a str>,
+    pub electrum_port: Option<i32>,
     pub ttl_secs: Option<i64>,
     pub expires_at: Option<DateTime<Utc>>,
     pub versions: Option<Value>,
@@ -73,9 +75,10 @@ pub async fn create_environment(
         insert into environments (
             id, name, npub_owner, status, block_policy, signet_challenge,
             component_explorer, component_indexer, component_faucet,
-            rpc_endpoint, explorer_endpoint, ttl_secs, expires_at, versions
+            rpc_endpoint, explorer_endpoint, indexer_endpoint, electrum_port, ttl_secs,
+            expires_at, versions
         )
-        values ($1, $2, $3, 'provisioning', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        values ($1, $2, $3, 'provisioning', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         returning *
         "#,
     )
@@ -89,6 +92,8 @@ pub async fn create_environment(
     .bind(env.component_faucet)
     .bind(env.rpc_endpoint)
     .bind(env.explorer_endpoint)
+    .bind(env.indexer_endpoint)
+    .bind(env.electrum_port)
     .bind(env.ttl_secs)
     .bind(env.expires_at)
     .bind(env.versions.clone())
@@ -113,6 +118,16 @@ pub async fn set_environment_status(pool: &PgPool, id: Uuid, status: &str) -> Re
         .await
         .map_err(DbError::from)?;
     Ok(())
+}
+
+// Sequential allocation inside the published electrum port range; the caller
+// rejects allocation past the range top.
+pub async fn next_electrum_port(pool: &PgPool, base: i32) -> Result<i32, DbError> {
+    let max: Option<i32> = sqlx::query_scalar("select max(electrum_port) from environments")
+        .fetch_one(pool)
+        .await
+        .map_err(DbError::from)?;
+    Ok(max.unwrap_or(base - 1) + 1)
 }
 
 #[derive(FromRow, Debug, Clone)]

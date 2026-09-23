@@ -17,11 +17,12 @@ const HTTPROUTE_MANIFEST: &str = include_str!("../templates/httproute.yaml");
 
 const SECRET_NAME: &str = "signet-secrets";
 
-const GATEWAY_NAME: &str = "signet-gateway";
+const GATEWAY_NAME: &str = "signet-eg";
 const GATEWAY_NAMESPACE: &str = "signet-platform";
-// A Gateway listener port must equal a Traefik entrypoint port; k3s' chart
-// serves the `web` entrypoint on :8000 behind the Service's :80.
-const TRAEFIK_WEB_PORT: i32 = 8000;
+// Per-env electrs TCP ports (spec §11.2). The local k3d cluster publishes a
+// narrow window; hosted clusters publish the full 50002-50502 range.
+pub const ELECTRUM_PORT_BASE: i32 = 50002;
+pub const ELECTRUM_PORT_MAX: i32 = 50011;
 
 const DEFAULT_BITCOIND_IMAGE: &str = "bitcoin/bitcoin:29.4";
 const DEFAULT_SIGNER_IMAGE: &str = "signet-signer:dev";
@@ -267,11 +268,11 @@ fn split_url_base(base: &str) -> (String, String) {
     }
 }
 
-fn gateway_api(kind: &str, plural: &str) -> ApiResource {
+fn gateway_api(version: &str, kind: &str, plural: &str) -> ApiResource {
     ApiResource {
         group: "gateway.networking.k8s.io".to_string(),
-        version: "v1".to_string(),
-        api_version: "gateway.networking.k8s.io/v1".to_string(),
+        version: version.to_string(),
+        api_version: format!("gateway.networking.k8s.io/{version}"),
         kind: kind.to_string(),
         plural: plural.to_string(),
     }
@@ -280,25 +281,19 @@ fn gateway_api(kind: &str, plural: &str) -> ApiResource {
 // The bundled CRD serves ReferenceGrant only as v1beta1 (storage+preferred);
 // v1 routes would hit an unregistered path and get a plain-text 404.
 fn reference_grant_api() -> ApiResource {
-    ApiResource {
-        group: "gateway.networking.k8s.io".to_string(),
-        version: "v1beta1".to_string(),
-        api_version: "gateway.networking.k8s.io/v1beta1".to_string(),
-        kind: "ReferenceGrant".to_string(),
-        plural: "referencegrants".to_string(),
-    }
+    gateway_api("v1beta1", "ReferenceGrant", "referencegrants")
 }
 
 fn gateway_object() -> DynamicObject {
-    let mut gateway = DynamicObject::new(GATEWAY_NAME, &gateway_api("Gateway", "gateways"));
+    let mut gateway = DynamicObject::new(GATEWAY_NAME, &gateway_api("v1", "Gateway", "gateways"));
     gateway.metadata.namespace = Some(GATEWAY_NAMESPACE.to_string());
     gateway.data = serde_json::json!({
         "spec": {
-            "gatewayClassName": "traefik",
+            "gatewayClassName": "signet-eg",
             "listeners": [{
                 "name": "http",
                 "protocol": "HTTP",
-                "port": TRAEFIK_WEB_PORT,
+                "port": 80,
                 "allowedRoutes": { "namespaces": { "from": "All" } },
             }],
         }
@@ -362,6 +357,7 @@ impl Orchestrator {
         secrets: &EnvSecrets,
         images: &BTreeMap<String, String>,
         components: EnvComponents,
+        electrum_port: Option<u16>,
     ) -> Result<(), OrchestrateError> {
         let ns = namespace_for(env_id);
 
@@ -416,18 +412,18 @@ impl Orchestrator {
             .create(&PostParams::default(), &secret)
             .await?;
 
-        self.apply_manifest(&ns, BITCOIND_MANIFEST, images, None)
-            .await?;
-        self.apply_manifest(&ns, SIGNER_MANIFEST, images, None)
-            .await?;
+        self.apply_manifest(&ns, BITCOIND_MANIFEST, images).await?;
+        self.apply_manifest(&ns, SIGNER_MANIFEST, images).await?;
         for spec in selected_specs(&components) {
-            self.apply_manifest(&ns, spec.manifest, images, None)
-                .await?;
+            self.apply_manifest(&ns, spec.manifest, images).await?;
         }
         if components.explorer {
-            let hostname = explorer_hostname(&self.env_host, env_id);
-            self.apply_manifest(&ns, HTTPROUTE_MANIFEST, images, Some(&hostname))
-                .await?;
+            self.apply_explorer_route(&ns, env_id).await?;
+        }
+        if let Some(port) = electrum_port {
+            self.apply_electrs_lb(&ns, port).await?;
+        }
+        if components.explorer || electrum_port.is_some() {
             self.ensure_route_grant(&ns).await?;
         }
         Ok(())
@@ -475,13 +471,58 @@ impl Orchestrator {
         let gateways = Api::<DynamicObject>::namespaced_with(
             self.client.clone(),
             GATEWAY_NAMESPACE,
-            &gateway_api("Gateway", "gateways"),
+            &gateway_api("v1", "Gateway", "gateways"),
         );
         if gateways.get_opt(GATEWAY_NAME).await?.is_none() {
             gateways
                 .create(&PostParams::default(), &gateway_object())
                 .await?;
         }
+        Ok(())
+    }
+
+    async fn apply_explorer_route(&self, ns: &str, env_id: &str) -> Result<(), OrchestrateError> {
+        let hostname = explorer_hostname(&self.env_host, env_id);
+        let mut route = route_document(&hostname)?;
+        route.metadata.namespace = Some(ns.to_string());
+        Api::<DynamicObject>::namespaced_with(
+            self.client.clone(),
+            ns,
+            &gateway_api("v1", "HTTPRoute", "httproutes"),
+        )
+        .create(&PostParams::default(), &route)
+        .await?;
+        Ok(())
+    }
+
+    // Electrum exposure for one env: a LoadBalancer Service whose port equals
+    // the env's allocated electrum port (klipper binds it on the node; the
+    // local k3d cluster publishes the same host ports).
+    async fn apply_electrs_lb(&self, ns: &str, port: u16) -> Result<(), OrchestrateError> {
+        let svc = Service {
+            metadata: ObjectMeta {
+                name: Some("electrs-lb".to_string()),
+                namespace: Some(ns.to_string()),
+                ..Default::default()
+            },
+            spec: Some(k8s_openapi::api::core::v1::ServiceSpec {
+                type_: Some("LoadBalancer".to_string()),
+                selector: Some(BTreeMap::from([("app".to_string(), "electrs".to_string())])),
+                ports: Some(vec![k8s_openapi::api::core::v1::ServicePort {
+                    port: port as i32,
+                    target_port: Some(
+                        k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(60401),
+                    ),
+                    protocol: Some("TCP".to_string()),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            status: None,
+        };
+        Api::<Service>::namespaced(self.client.clone(), ns)
+            .create(&PostParams::default(), &svc)
+            .await?;
         Ok(())
     }
 
@@ -562,7 +603,6 @@ impl Orchestrator {
         ns: &str,
         manifest: &str,
         images: &BTreeMap<String, String>,
-        route_hostname: Option<&str>,
     ) -> Result<(), OrchestrateError> {
         for value in Self::parse_docs(manifest)? {
             let kind = value["kind"].as_str().ok_or_else(|| {
@@ -604,22 +644,6 @@ impl Orchestrator {
                         .create(&PostParams::default(), &dep)
                         .await?;
                 }
-                "HTTPRoute" => {
-                    let Some(hostname) = route_hostname else {
-                        return Err(OrchestrateError::ManifestKind(
-                            "HTTPRoute requires a route hostname".to_string(),
-                        ));
-                    };
-                    let mut route = route_document(hostname)?;
-                    route.metadata.namespace = Some(ns.to_string());
-                    Api::<DynamicObject>::namespaced_with(
-                        self.client.clone(),
-                        ns,
-                        &gateway_api("HTTPRoute", "httproutes"),
-                    )
-                    .create(&PostParams::default(), &route)
-                    .await?;
-                }
                 other => {
                     return Err(OrchestrateError::ManifestKind(other.to_string()));
                 }
@@ -653,7 +677,12 @@ mod tests {
                 assert!(
                     matches!(
                         probe.kind.as_str(),
-                        "ConfigMap" | "StatefulSet" | "Service" | "Deployment" | "HTTPRoute"
+                        "ConfigMap"
+                            | "StatefulSet"
+                            | "Service"
+                            | "Deployment"
+                            | "HTTPRoute"
+                            | "TCPRoute"
                     ),
                     "unexpected kind {}",
                     probe.kind
@@ -963,12 +992,12 @@ mod tests {
     }
 
     #[test]
-    fn gateway_object_allows_routes_from_every_namespace() {
+    fn gateway_object_serves_http_for_all_namespaces() {
         let gateway = serde_json::to_value(gateway_object()).unwrap();
         assert_eq!(gateway["metadata"]["name"], GATEWAY_NAME);
-        assert_eq!(gateway["spec"]["gatewayClassName"], "traefik");
+        assert_eq!(gateway["spec"]["gatewayClassName"], "signet-eg");
         let listener = &gateway["spec"]["listeners"][0];
-        assert_eq!(listener["port"], TRAEFIK_WEB_PORT);
+        assert_eq!(listener["name"], "http");
         assert_eq!(listener["allowedRoutes"]["namespaces"]["from"], "All");
     }
 
