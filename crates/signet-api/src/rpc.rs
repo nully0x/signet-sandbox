@@ -211,6 +211,43 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
     };
 
     let rpc_endpoint = format!("{}/env/{env_id}/rpc", state.public_url);
+    let explorer_endpoint = params
+        .components
+        .explorer
+        .then(|| state.orchestrator.explorer_url(&short_id(env_id)));
+    let electrs_requested = params.components.indexer || params.components.explorer;
+    let electrum_port = if electrs_requested {
+        match signet_db::next_electrum_port(&state.pool, signet_orchestrator::ELECTRUM_PORT_BASE)
+            .await
+        {
+            Ok(port)
+                if (signet_orchestrator::ELECTRUM_PORT_BASE
+                    ..=signet_orchestrator::ELECTRUM_PORT_MAX)
+                    .contains(&port) =>
+            {
+                Some(port)
+            }
+            Ok(_) => {
+                return Response::error(
+                    Some(id),
+                    Error::new(
+                        INVALID_PARAMS,
+                        "electrum port range exhausted (50002-50502)",
+                    ),
+                );
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "electrum port allocation failed");
+                return Response::error(
+                    Some(id),
+                    Error::new(INTERNAL_ERROR, "port allocation failed"),
+                );
+            }
+        }
+    } else {
+        None
+    };
+    let indexer_endpoint = electrum_port.map(|p| format!("tcp://localhost:{p}"));
     let row = signet_db::NewEnvironment {
         id: env_id,
         name: &params.name,
@@ -221,6 +258,9 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
         component_indexer: params.components.indexer,
         component_faucet: params.components.faucet,
         rpc_endpoint: &rpc_endpoint,
+        explorer_endpoint: explorer_endpoint.as_deref(),
+        indexer_endpoint: indexer_endpoint.as_deref(),
+        electrum_port,
         ttl_secs: params.ttl_secs,
         expires_at: params
             .ttl_secs
@@ -250,6 +290,7 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
                 faucet: params.components.faucet,
                 explorer: params.components.explorer,
             },
+            electrum_port.map(|p| p as u16),
         )
         .await
     {
@@ -478,7 +519,7 @@ fn bundle_for(
         rpc_url: row.rpc_endpoint.clone(),
         rpc_auth,
         zmq_url: None,
-        indexer_url: row.indexer_endpoint.clone(),
+        indexer_endpoint: row.indexer_endpoint.clone(),
         explorer_url: row.explorer_endpoint.clone(),
         faucet_url: row.faucet_endpoint.clone(),
         lightning: None,
@@ -505,8 +546,8 @@ mod tests {
     use nostr::nips::nip19::ToBech32 as _;
     use nostr::types::Timestamp;
 
-    const PUBLIC_URL: &str = "http://localhost:8080";
-    const RPC_URL: &str = "http://localhost:8080/v1/rpc";
+    const PUBLIC_URL: &str = "http://localhost:8081";
+    const RPC_URL: &str = "http://localhost:8081/v1/rpc";
 
     fn auth_header(keys: &Keys, url: &str, method: &str) -> String {
         let event = EventBuilder::new(Kind::HttpAuth, "")

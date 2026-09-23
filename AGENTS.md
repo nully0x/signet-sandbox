@@ -12,9 +12,20 @@ Svelte dashboard embedded via rust-embed (post-MVP).
 
 ## Commands
 
-Enter the devshell first (pins cargo, k3d, kubectl, just, sqlx-cli, node):
+Enter the devshell first (pins k3d, kubectl, cargo, just, sqlx-cli, node):
 
     nix develop
+
+Machine bootstrap (one-time, sudo once — rootful podman socket for k3d):
+
+    just doctor       # what is missing on this machine
+    just host-setup   # socket permissions only; never needed again
+
+Cluster + image operations need no sudo and are separate concerns:
+
+    just cluster-up                  # k3d create + gateway stack (no sudo)
+    just images-import IMG...        # rootless podman build -> cluster
+    just db-up / db-down             # postgres (rootless podman)
 
 Local dev loop:
 
@@ -26,7 +37,10 @@ Local dev loop:
     just test / fmt / lint / check
     just verify-all         # build + workspace tests — run before calling work done
 
-Cluster (k3s): `just cluster-up / deploy-dev / cluster-status / logs-signer`.
+Cluster (k3d, no sudo): `just cluster-up / cluster-down / images-import`.
+Images build with rootless podman — docker operations stay separate from
+cluster operations. The cluster runs on the ROOTFUL podman socket; see
+gotcha 17.
 
 Long-running or stateful commands (k3d/kubectl provisioning, docker builds,
 image imports, dev servers) are run by the user, not the agent: agent tool
@@ -161,3 +175,25 @@ Lock files, generated files, and vendored code get their own commits.
     `ELECTRS_MAGIC` from there. Auth is `--cookie-file` only (no inline
     `--cookie` in 0.11+); sync is p2p-only (`--jsonrpc-import` was
     removed; `ELECTRS_JSONRPC_IMPORT` is silently ignored).
+16. **Gateway coexistence and klipper host ports.** Envoy Gateway is the
+    edge (see docs/GATEWAY.md); Traefik coexists until the cluster
+    recreate. Two LoadBalancer Services claiming host port 80 on one node
+    cannot coexist: the second service's klipper `svclb` pod goes Pending
+    with "didn't have free ports for the requested pod ports" — diagnose
+    via `kubectl describe pod` on the svclb pod; service events do not
+    show it. EG 1.2.x does not self-create its GatewayClass, and the
+    Envoy data plane deploys into `envoy-gateway-system`, not the
+    Gateway's namespace. EG ships its own gateway-api CRDs (supersede the
+    manual standard install). Multi-node production requires MetalLB —
+    klipper has no VIP or failover.
+17. **Rootless podman cannot host the cluster; rootful socket is the
+    answer.** k3s v1.32 in a rootless container dies twice: first on
+    cpuset delegation (fixable via a `user@.service` drop-in +
+    re-login), then fatally at kubelet — `open /dev/kmsg: operation not
+    permitted` — because kubelet wants CAP_SYSLOG, which no rootless
+    container gets. The supported setup is k3d against the ROOTFUL
+    podman system socket (`/run/podman/podman.sock`, SocketMode 0666 via
+    `just host-setup`, symlinked from `/var/run/docker.sock`): cluster
+    ops then need no sudo. Podman stays rootless for image builds;
+    `podman save` tars are portable — import them into the cluster with
+    `k3d image import` regardless of runtime.

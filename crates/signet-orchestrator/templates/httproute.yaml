@@ -1,0 +1,20 @@
+# Public explorer route for one env. The orchestrator patches `hostnames`
+# with env-<id>.<env-host> and attaches the route to the platform Gateway;
+# cross-namespace attachment needs the per-env ReferenceGrant in the Gateway
+# namespace (created alongside this route).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: explorer
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: signet-eg
+      namespace: signet-platform
+  hostnames:
+    - REPLACE
+  rules:
+    - backendRefs:
+        - name: explorer
+          port: 8080

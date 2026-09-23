@@ -21,7 +21,7 @@ pub struct ConnectionBundle {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zmq_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub indexer_url: Option<String>,
+    pub indexer_endpoint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub explorer_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -47,7 +47,7 @@ mod tests {
             rpc_url: "https://example/env/rpc".into(),
             rpc_auth: Some("user:pass".into()),
             zmq_url: None,
-            indexer_url: None,
+            indexer_endpoint: None,
             explorer_url: None,
             faucet_url: None,
             lightning: None,
@@ -66,7 +66,7 @@ mod tests {
         assert!(obj.contains_key("rpc_url"));
         for absent in [
             "zmq_url",
-            "indexer_url",
+            "indexer_endpoint",
             "explorer_url",
             "faucet_url",
             "lightning",

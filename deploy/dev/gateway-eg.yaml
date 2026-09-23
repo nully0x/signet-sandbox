@@ -1,0 +1,28 @@
+# Edge bootstrap for the signet dev cluster: Envoy Gateway controller +
+# GatewayClass + the shared platform Gateway. Per-env electrum listeners are
+# appended to this Gateway by the orchestrator (port-per-env, 50002-50502).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: signet-platform
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: signet-eg
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: signet-eg
+  namespace: signet-platform
+spec:
+  gatewayClassName: signet-eg
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces: { from: All }
