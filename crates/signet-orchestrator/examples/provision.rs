@@ -34,6 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &signet_orchestrator::resolve_images(&None).unwrap(),
                     components,
                     None,
+                    None,
                 )
                 .await?;
             println!(

@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use chrono::{DateTime, Utc};
 use k8s_openapi::api::apps::v1::{Deployment, StatefulSet};
 use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Secret, Service};
 use kube::api::{Api, DeleteParams, ObjectMeta, PostParams};
@@ -16,6 +17,9 @@ const EXPLORER_MANIFEST: &str = include_str!("../templates/explorer.yaml");
 const HTTPROUTE_MANIFEST: &str = include_str!("../templates/httproute.yaml");
 
 const SECRET_NAME: &str = "signet-secrets";
+
+/// RFC 3339 timestamp; past-due namespaces are reaped (spec §13).
+pub const EXPIRES_AT_ANNOTATION: &str = "signet.sandbox/expires-at";
 
 const GATEWAY_NAME: &str = "signet-eg";
 const GATEWAY_NAMESPACE: &str = "signet-platform";
@@ -87,7 +91,10 @@ pub const COMPONENTS: &[ComponentSpec] = &[
         default_tag: "v3.3.1",
         deps: &["electrs"],
         versionable: true,
-        containers: &[("explorer", "mempool/backend"), ("explorer-web", "mempool/frontend")],
+        containers: &[
+            ("explorer", "mempool/backend"),
+            ("explorer-web", "mempool/frontend"),
+        ],
         requested: |c| c.explorer,
     },
 ];
@@ -207,6 +214,28 @@ fn container_images(images: &BTreeMap<String, String>) -> BTreeMap<String, Strin
 
 pub fn namespace_for(env_id: &str) -> String {
     format!("env-{env_id}")
+}
+
+fn namespace_object(env_id: &str, expires_at: Option<DateTime<Utc>>) -> Namespace {
+    let mut metadata = ObjectMeta {
+        name: Some(namespace_for(env_id)),
+        labels: Some(BTreeMap::from([(
+            "signet.sandbox/environment".to_string(),
+            env_id.to_string(),
+        )])),
+        ..Default::default()
+    };
+    if let Some(ts) = expires_at {
+        metadata.annotations = Some(BTreeMap::from([(
+            EXPIRES_AT_ANNOTATION.to_string(),
+            ts.to_rfc3339(),
+        )]));
+    }
+    Namespace {
+        metadata,
+        spec: None,
+        status: None,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -387,23 +416,13 @@ impl Orchestrator {
         images: &BTreeMap<String, String>,
         components: EnvComponents,
         electrum_port: Option<u16>,
+        expires_at: Option<DateTime<Utc>>,
     ) -> Result<(), OrchestrateError> {
         let ns = namespace_for(env_id);
 
         self.ensure_gateway().await?;
 
-        let namespace = Namespace {
-            metadata: ObjectMeta {
-                name: Some(ns.clone()),
-                labels: Some(BTreeMap::from([(
-                    "signet.sandbox/environment".to_string(),
-                    env_id.to_string(),
-                )])),
-                ..Default::default()
-            },
-            spec: None,
-            status: None,
-        };
+        let namespace = namespace_object(env_id, expires_at);
         Api::<Namespace>::all(self.client.clone())
             .create(&PostParams::default(), &namespace)
             .await?;
@@ -738,6 +757,25 @@ mod tests {
     }
 
     #[test]
+    fn ttl_stamps_expires_at_annotation_on_namespace() {
+        let expires = Utc::now() + chrono::Duration::seconds(1200);
+        let ns = namespace_object("9f2a1b", Some(expires));
+        let annotations = ns.metadata.annotations.unwrap();
+        let raw = annotations
+            .get(EXPIRES_AT_ANNOTATION)
+            .expect("expires-at annotation");
+        let parsed: DateTime<Utc> = DateTime::parse_from_rfc3339(raw).unwrap().into();
+        assert_eq!(parsed, expires);
+        assert_eq!(ns.metadata.name.as_deref(), Some("env-9f2a1b"));
+    }
+
+    #[test]
+    fn no_ttl_leaves_namespace_annotations_off() {
+        let ns = namespace_object("9f2a1b", None);
+        assert!(ns.metadata.annotations.is_none());
+    }
+
+    #[test]
     fn faucet_fund_request_targets_service_proxy() {
         let request = faucet_fund_request(
             "env-abc123",
@@ -947,7 +985,10 @@ mod tests {
 
         let patch = container_images(&images);
         assert_eq!(patch.get("explorer").unwrap(), "mempool/backend:v3.3.0");
-        assert_eq!(patch.get("explorer-web").unwrap(), "mempool/frontend:v3.3.0");
+        assert_eq!(
+            patch.get("explorer-web").unwrap(),
+            "mempool/frontend:v3.3.0"
+        );
 
         let docs = Orchestrator::parse_docs(EXPLORER_MANIFEST).unwrap();
         let mut deployment: Deployment = serde_yaml::from_value(docs[0].clone()).unwrap();

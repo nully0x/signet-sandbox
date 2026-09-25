@@ -4,7 +4,7 @@ use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 use signet_core::bundle::ConnectionBundle;
@@ -178,6 +178,20 @@ struct IdParams {
     id: Uuid,
 }
 
+fn resolve_expires_at(
+    ttl_secs: Option<i64>,
+    now: DateTime<Utc>,
+) -> Result<Option<DateTime<Utc>>, String> {
+    match ttl_secs {
+        None => Ok(None),
+        Some(s) if s <= 0 => Err("ttl_secs must be positive".to_string()),
+        Some(s) => chrono::TimeDelta::try_seconds(s)
+            .and_then(|d| now.checked_add_signed(d))
+            .map(Some)
+            .ok_or_else(|| "ttl_secs out of range".to_string()),
+    }
+}
+
 #[derive(Deserialize)]
 struct FaucetParams {
     id: Uuid,
@@ -194,6 +208,10 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
     let images = match signet_orchestrator::resolve_images(&params.versions) {
         Ok(images) => images,
         Err(e) => return Response::error(Some(id), Error::new(INVALID_PARAMS, e.to_string())),
+    };
+    let expires_at = match resolve_expires_at(params.ttl_secs, Utc::now()) {
+        Ok(expires_at) => expires_at,
+        Err(e) => return Response::error(Some(id), Error::new(INVALID_PARAMS, e)),
     };
     let versions_json = serde_json::to_value(&images).ok();
 
@@ -262,9 +280,7 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
         indexer_endpoint: indexer_endpoint.as_deref(),
         electrum_port,
         ttl_secs: params.ttl_secs,
-        expires_at: params
-            .ttl_secs
-            .map(|s| Utc::now() + chrono::Duration::seconds(s)),
+        expires_at,
         versions: versions_json,
     };
 
@@ -291,6 +307,7 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
                 explorer: params.components.explorer,
             },
             electrum_port.map(|p| p as u16),
+            expires_at,
         )
         .await
     {
@@ -645,6 +662,17 @@ mod tests {
         assert_eq!(params.block_policy, None);
         assert!(!params.components.explorer);
         assert_eq!(params.ttl_secs, None);
+    }
+
+    #[test]
+    fn resolve_expires_at_validates_ttl() {
+        let now = Utc::now();
+        assert!(resolve_expires_at(None, now).unwrap().is_none());
+        let expires = resolve_expires_at(Some(1200), now).unwrap().unwrap();
+        assert_eq!(expires, now + chrono::Duration::seconds(1200));
+        assert!(resolve_expires_at(Some(0), now).is_err());
+        assert!(resolve_expires_at(Some(-5), now).is_err());
+        assert!(resolve_expires_at(Some(i64::MAX), now).is_err());
     }
 
     #[test]
