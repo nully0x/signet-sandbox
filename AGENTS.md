@@ -66,7 +66,8 @@ output redirected to a log and polled.
 
 ## Conventions
 
-- Wire protocol: JSON-RPC 2.0 over `POST /rpc`, methods `environment.*`.
+- Wire protocol: JSON-RPC 2.0 over `POST /v1/rpc`, methods `environment.*`,
+  `token.*`.
   Failures are JSON-RPC error objects (codes in `signet-rpc/src/error.rs`),
   never HTTP status semantics.
 - serde `snake_case` for wire types.
@@ -174,7 +175,11 @@ Lock files, generated files, and vendored code get their own commits.
     `signet-secrets/SIGNET_MAGIC` and the electrs STS reads
     `ELECTRS_MAGIC` from there. Auth is `--cookie-file` only (no inline
     `--cookie` in 0.11+); sync is p2p-only (`--jsonrpc-import` was
-    removed; `ELECTRS_JSONRPC_IMPORT` is silently ignored).
+    removed; `ELECTRS_JSONRPC_IMPORT` is silently ignored). Building
+    pre-0.11 tags needs `--build-arg SYSTEM_ROCKSDB=0`: trixie's
+    librocksdb 9.x headers do not match the old electrs-rocksdb fork,
+    so the vendored rocksdb source must compile instead (slow build,
+    needs docker RAM).
 16. **Gateway coexistence and klipper host ports.** Envoy Gateway is the
     edge (see docs/GATEWAY.md); Traefik coexists until the cluster
     recreate. Two LoadBalancer Services claiming host port 80 on one node
