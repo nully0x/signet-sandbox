@@ -12,12 +12,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let orchestrator = Orchestrator::connect(&env_host).await?;
     match action.as_str() {
         "create" => {
-            let flags: Vec<String> = args.collect();
+            let mut ttl_secs: Option<i64> = None;
+            let mut flags: Vec<String> = Vec::new();
+            let mut rest = args;
+            while let Some(arg) = rest.next() {
+                if arg == "--ttl" {
+                    let secs = rest.next().expect("--ttl needs a value in seconds");
+                    ttl_secs = Some(secs.parse().expect("--ttl must be an integer"));
+                } else {
+                    flags.push(arg);
+                }
+            }
             let components = EnvComponents {
                 indexer: flags.iter().any(|f| f == "indexer"),
                 faucet: flags.iter().any(|f| f == "faucet"),
                 explorer: flags.iter().any(|f| f == "explorer"),
             };
+            let expires_at = ttl_secs.map(|s| {
+                chrono::Utc::now()
+                    .checked_add_signed(
+                        chrono::TimeDelta::try_seconds(s).expect("ttl out of range"),
+                    )
+                    .expect("ttl out of range")
+            });
             let key = signet_signer::generate_key();
             let challenge = key.challenge.clone();
             let secrets = EnvSecrets {
@@ -34,12 +51,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &signet_orchestrator::resolve_images(&None).unwrap(),
                     components,
                     None,
-                    None,
+                    expires_at,
                 )
                 .await?;
             println!(
-                "created env-{env_id} challenge={challenge} indexer={} faucet={} explorer={}",
-                components.indexer, components.faucet, components.explorer
+                "created env-{env_id} challenge={challenge} indexer={} faucet={} explorer={} ttl={:?}",
+                components.indexer, components.faucet, components.explorer, ttl_secs
             );
         }
         "destroy" => {
