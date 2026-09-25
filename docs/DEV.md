@@ -91,21 +91,31 @@ version key, non-positive or overflowing `ttl_secs`).
 
 ### API tokens (Bruno, curl, CI)
 
-Signing every request does not fit API clients. Mint a token once with a
-NIP-98 header, then use it as a bearer:
+Signing every request does not fit API clients. Mint a bearer token once
+from the terminal and never paste NIP-98 headers into API tools — the
+signed event wraps across terminal lines, and hand-copying it corrupts
+the signature:
 
 ```bash
+SECRET=<64-hex secret key>
+HDR=$(cargo run -q -p signet-nostr --example nip98 -- \
+    http://localhost:8081/v1/rpc POST "$SECRET" | tail -1)
 curl -s -X POST localhost:8081/v1/rpc \
     -H 'content-type: application/json' -H "$HDR" \
-    -d '{"jsonrpc":"2.0","id":1,"method":"token.create"}'
-# -> {"result":{"token":"sgn_..."}}  (raw token shown once; only the hash is stored)
+    -d '{"jsonrpc":"2.0","id":1,"method":"token.create"}' | jq -r .result.token
 ```
 
-All later requests take `Authorization: Bearer sgn_...`. In Bruno: put the
-`token.create` call first with a pasted NIP-98 header, capture the token
-with a post-response script (`bru.setEnvVar("token", res.body.result.token)`),
-and set a collection-level header `Authorization: Bearer {{token}}`. Bearer
+The last line prints only the token. Copy it wherever a bearer is needed:
+a Bruno collection variable, `Authorization: Bearer sgn_...` in curl, CI
+secrets. The raw token is shown once; only its hash is stored. Bearer
 callers cannot mint new tokens — issuance is NIP-98-only.
+
+NIP-98 headers expire after 300 s. The mint above always uses a fresh
+header, so the window rarely matters. For a long-lived pasted header in
+local dev you can lift it with `SIGNET_NIP98_MAX_AGE_SECS=0` (or add it
+to `.env`). Signature, URL, and method checks stay on; use the default
+window anywhere untrusted. The header must still be minted for the exact
+URL you call.
 
 Provision directly against the cluster without the API (useful for
 orchestrator gates):
