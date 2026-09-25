@@ -80,12 +80,12 @@ async fn dispatch(
     };
 
     let id = request.id.clone().unwrap_or(Id::Null);
-    let caller = match authenticate(&state, &method, &headers).await {
-        Ok(caller) => caller,
+    let (caller, via_nip98) = match authenticate(&state, &method, &headers).await {
+        Ok(auth) => auth,
         Err(err) => return (StatusCode::OK, Json(Response::error(Some(id), err))),
     };
 
-    let response = handle(&state, caller, request).await;
+    let response = handle(&state, caller, via_nip98, request).await;
     (StatusCode::OK, Json(response))
 }
 
@@ -93,18 +93,18 @@ async fn authenticate(
     state: &AppState,
     http_method: &Method,
     headers: &HeaderMap,
-) -> Result<Caller, Error> {
+) -> Result<(Caller, bool), Error> {
     let header = headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .ok_or_else(|| unauthenticated("missing Authorization header"))?;
 
     if let Some(payload) = header.strip_prefix("Nostr ") {
-        return verify_nip98(payload, &state.public_url, http_method.as_str());
+        return verify_nip98(payload, &state.public_url, http_method.as_str()).map(|c| (c, true));
     }
 
     if let Some(raw) = header.strip_prefix("Bearer ") {
-        return verify_bearer(&state.pool, raw).await;
+        return verify_bearer(&state.pool, raw).await.map(|c| (c, false));
     }
 
     Err(unauthenticated("unsupported Authorization scheme"))
@@ -139,14 +139,31 @@ fn unauthenticated(message: &'static str) -> Error {
     Error::new(UNAUTHENTICATED, message)
 }
 
-async fn handle(state: &AppState, caller: Caller, request: Request) -> Response {
+async fn handle(state: &AppState, caller: Caller, via_nip98: bool, request: Request) -> Response {
     let id = request.id.clone().unwrap_or(Id::Null);
     match request.method.as_str() {
+        // Bearer callers must not mint new tokens; issuance is NIP-98-only.
+        "token.create" if !via_nip98 => Response::error(
+            Some(id),
+            unauthenticated("token.create requires NIP-98 authentication"),
+        ),
+        "token.create" => token_create(state, id, caller).await,
         "environment.create" => environment_create(state, id, caller, request.params).await,
         "environment.get" => environment_get(state, id, request.params).await,
         "environment.destroy" => environment_destroy(state, id, caller, request.params).await,
         "environment.faucet" => environment_faucet(state, id, caller, request.params).await,
         _ => Response::error(Some(id), Error::method_not_found(&request.method)),
+    }
+}
+
+async fn token_create(state: &AppState, id: Id, caller: Caller) -> Response {
+    let token = ApiToken::generate();
+    match signet_db::insert_api_token(&state.pool, token.hash().as_hex(), &caller.npub).await {
+        Ok(()) => Response::result(Some(id), serde_json::json!({ "token": token.as_str() })),
+        Err(e) => {
+            tracing::error!(error = %e, "api token insert failed");
+            Response::error(Some(id), Error::new(INTERNAL_ERROR, "token persist failed"))
+        }
     }
 }
 
