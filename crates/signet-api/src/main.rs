@@ -1,6 +1,7 @@
 mod rpc;
 
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
@@ -36,6 +37,14 @@ struct Args {
         help = "Reaper pass interval in seconds; 0 disables the reaper"
     )]
     reaper_interval_secs: u64,
+
+    #[arg(
+        long,
+        env = "SIGNET_NIP98_MAX_AGE_SECS",
+        default_value_t = 300,
+        help = "NIP-98 acceptance window in seconds; 0 disables expiry (dev only)"
+    )]
+    nip98_max_age_secs: u64,
 }
 
 #[tokio::main]
@@ -53,6 +62,12 @@ async fn main() -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("kube client: {e}"))?;
 
+    if args.nip98_max_age_secs == 0 {
+        tracing::warn!(
+            "NIP-98 expiry disabled (SIGNET_NIP98_MAX_AGE_SECS=0): dev only, do not deploy"
+        );
+    }
+
     if args.reaper_interval_secs > 0 {
         let reaper = orchestrator.clone();
         let interval = std::time::Duration::from_secs(args.reaper_interval_secs);
@@ -69,7 +84,16 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("reaper disabled");
     }
 
-    let app = rpc::router(pool, orchestrator, args.public_url);
+    let app = rpc::router(
+        pool,
+        orchestrator,
+        args.public_url,
+        if args.nip98_max_age_secs == 0 {
+            None
+        } else {
+            Some(Duration::from_secs(args.nip98_max_age_secs))
+        },
+    );
 
     let listener = tokio::net::TcpListener::bind(args.listen).await?;
     tracing::info!(listen = %args.listen, "signet-api listening");

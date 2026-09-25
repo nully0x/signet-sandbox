@@ -10,7 +10,7 @@ use serde_json::Value;
 use signet_core::bundle::ConnectionBundle;
 use signet_core::env::{BlockPolicy, EnvStatus};
 use signet_db::{EnvironmentRow, PgPool};
-use signet_nostr::{ApiToken, DEFAULT_MAX_AGE, verify_nip98_header};
+use signet_nostr::{ApiToken, verify_nip98_header};
 use signet_orchestrator::{EnvComponents, EnvSecrets, Orchestrator};
 use signet_rpc::envelope::{Id, Request, Response};
 use signet_rpc::error::{
@@ -22,13 +22,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
-const NIP98_MAX_AGE: Duration = DEFAULT_MAX_AGE;
-
 #[derive(Clone)]
 pub struct AppState {
     pool: PgPool,
     orchestrator: Arc<Orchestrator>,
     public_url: String,
+    nip98_max_age: Option<Duration>,
 }
 
 pub struct Caller {
@@ -43,7 +42,12 @@ impl std::fmt::Debug for Caller {
     }
 }
 
-pub fn router(pool: PgPool, orchestrator: Orchestrator, public_url: String) -> Router {
+pub fn router(
+    pool: PgPool,
+    orchestrator: Orchestrator,
+    public_url: String,
+    nip98_max_age: Option<Duration>,
+) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/v1/rpc", post(dispatch))
@@ -51,6 +55,7 @@ pub fn router(pool: PgPool, orchestrator: Orchestrator, public_url: String) -> R
             pool,
             orchestrator: Arc::new(orchestrator),
             public_url,
+            nip98_max_age,
         })
 }
 
@@ -100,7 +105,13 @@ async fn authenticate(
         .ok_or_else(|| unauthenticated("missing Authorization header"))?;
 
     if let Some(payload) = header.strip_prefix("Nostr ") {
-        return verify_nip98(payload, &state.public_url, http_method.as_str()).map(|c| (c, true));
+        return verify_nip98(
+            payload,
+            &state.public_url,
+            http_method.as_str(),
+            state.nip98_max_age,
+        )
+        .map(|c| (c, true));
     }
 
     if let Some(raw) = header.strip_prefix("Bearer ") {
@@ -110,12 +121,20 @@ async fn authenticate(
     Err(unauthenticated("unsupported Authorization scheme"))
 }
 
-fn verify_nip98(payload: &str, public_url: &str, method: &str) -> Result<Caller, Error> {
+fn verify_nip98(
+    payload: &str,
+    public_url: &str,
+    method: &str,
+    max_age: Option<Duration>,
+) -> Result<Caller, Error> {
     let header = format!("Nostr {payload}");
     let url = format!("{public_url}/v1/rpc");
-    match verify_nip98_header(&header, &url, method, NIP98_MAX_AGE) {
+    match verify_nip98_header(&header, &url, method, max_age) {
         Ok(npub) => Ok(Caller { npub }),
-        Err(_) => Err(unauthenticated("NIP-98 authentication failed")),
+        Err(e) => Err(Error::new(
+            UNAUTHENTICATED,
+            format!("NIP-98 authentication failed: {e}"),
+        )),
     }
 }
 
@@ -599,7 +618,12 @@ mod tests {
     }
 
     fn verified(header: &str) -> Result<Caller, Error> {
-        verify_nip98(header.strip_prefix("Nostr ").unwrap(), PUBLIC_URL, "POST")
+        verify_nip98(
+            header.strip_prefix("Nostr ").unwrap(),
+            PUBLIC_URL,
+            "POST",
+            Some(signet_nostr::DEFAULT_MAX_AGE),
+        )
     }
 
     fn is_unauthenticated(err: &Error) -> bool {
