@@ -28,6 +28,14 @@ struct Args {
 
     #[arg(long, env = "DATABASE_URL")]
     database_url: String,
+
+    #[arg(
+        long,
+        env = "SIGNET_REAPER_INTERVAL_SECS",
+        default_value_t = 60,
+        help = "Reaper pass interval in seconds; 0 disables the reaper"
+    )]
+    reaper_interval_secs: u64,
 }
 
 #[tokio::main]
@@ -44,6 +52,22 @@ async fn main() -> anyhow::Result<()> {
     let orchestrator = signet_orchestrator::Orchestrator::connect(&args.env_host)
         .await
         .map_err(|e| anyhow::anyhow!("kube client: {e}"))?;
+
+    if args.reaper_interval_secs > 0 {
+        let reaper = orchestrator.clone();
+        let interval = std::time::Duration::from_secs(args.reaper_interval_secs);
+        tracing::info!(interval_secs = args.reaper_interval_secs, "reaper enabled");
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(interval).await;
+                if let Err(e) = reaper.reap_expired().await {
+                    tracing::warn!(error = %e, "reaper pass failed");
+                }
+            }
+        });
+    } else {
+        tracing::info!("reaper disabled");
+    }
 
     let app = rpc::router(pool, orchestrator, args.public_url);
 

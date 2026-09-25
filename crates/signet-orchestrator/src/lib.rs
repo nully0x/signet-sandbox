@@ -3,11 +3,13 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use k8s_openapi::api::apps::v1::{Deployment, StatefulSet};
 use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Secret, Service};
-use kube::api::{Api, DeleteParams, ObjectMeta, PostParams};
+use kube::api::{Api, ObjectMeta, PostParams};
 use kube::core::{ApiResource, DynamicObject};
 use kube::{Client, Error};
 use serde::Deserialize;
 use serde_yaml::Value;
+
+mod reaper;
 
 const BITCOIND_MANIFEST: &str = include_str!("../templates/bitcoind.yaml");
 const SIGNER_MANIFEST: &str = include_str!("../templates/signer.yaml");
@@ -17,6 +19,9 @@ const EXPLORER_MANIFEST: &str = include_str!("../templates/explorer.yaml");
 const HTTPROUTE_MANIFEST: &str = include_str!("../templates/httproute.yaml");
 
 const SECRET_NAME: &str = "signet-secrets";
+
+/// Marks a namespace as a signet environment namespace.
+pub const ENV_LABEL: &str = "signet.sandbox/environment";
 
 /// RFC 3339 timestamp; past-due namespaces are reaped (spec §13).
 pub const EXPIRES_AT_ANNOTATION: &str = "signet.sandbox/expires-at";
@@ -220,7 +225,7 @@ fn namespace_object(env_id: &str, expires_at: Option<DateTime<Utc>>) -> Namespac
     let mut metadata = ObjectMeta {
         name: Some(namespace_for(env_id)),
         labels: Some(BTreeMap::from([(
-            "signet.sandbox/environment".to_string(),
+            ENV_LABEL.to_string(),
             env_id.to_string(),
         )])),
         ..Default::default()
@@ -385,6 +390,7 @@ fn route_document(hostname: &str) -> Result<DynamicObject, OrchestrateError> {
     Ok(serde_yaml::from_value(value)?)
 }
 
+#[derive(Clone)]
 pub struct Orchestrator {
     client: Client,
     env_host: String,
@@ -478,25 +484,7 @@ impl Orchestrator {
     }
 
     pub async fn destroy_environment(&self, env_id: &str) -> Result<(), OrchestrateError> {
-        let ns = namespace_for(env_id);
-        Api::<Namespace>::all(self.client.clone())
-            .delete(&ns, &DeleteParams::default())
-            .await?;
-        // The HTTPRoute dies with the namespace cascade. The ReferenceGrant
-        // lives in the Gateway namespace and is best-effort: a grant naming a
-        // deleted namespace authorizes nothing, so a failed cleanup must not
-        // mask the destroy.
-        let grants = Api::<DynamicObject>::namespaced_with(
-            self.client.clone(),
-            GATEWAY_NAMESPACE,
-            &reference_grant_api(),
-        );
-        if let Err(e) = grants.delete(&ns, &DeleteParams::default()).await
-            && !matches!(&e, Error::Api(status) if status.code == 404)
-        {
-            tracing::warn!(error = %e, env_ns = %ns, "ReferenceGrant cleanup failed");
-        }
-        Ok(())
+        self.delete_env_namespace(&namespace_for(env_id)).await
     }
 
     async fn ensure_gateway(&self) -> Result<(), OrchestrateError> {
