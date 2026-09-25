@@ -35,7 +35,8 @@ pub struct EnvComponents {
 }
 
 /// Optional per-env component. Adding a protocol is a new entry here plus a
-/// template; the container name must equal `key` so image patching finds it.
+/// template; `containers` maps every pod container to its platform-owned repo
+/// so image patching finds it.
 pub struct ComponentSpec {
     pub key: &'static str,
     pub manifest: &'static str,
@@ -45,6 +46,9 @@ pub struct ComponentSpec {
     pub deps: &'static [&'static str],
     /// Accepts a user image tag in the `versions` map.
     pub versionable: bool,
+    /// (container name, repo) pairs a resolved tag applies to. Multi-container
+    /// pods pin all containers to the same tag (mempool backend + frontend).
+    pub containers: &'static [(&'static str, &'static str)],
     pub requested: fn(&EnvComponents) -> bool,
 }
 
@@ -63,6 +67,7 @@ pub const COMPONENTS: &[ComponentSpec] = &[
         default_tag: "dev",
         deps: &[],
         versionable: true,
+        containers: &[("electrs", "electrs")],
         requested: |c| c.indexer,
     },
     ComponentSpec {
@@ -72,6 +77,7 @@ pub const COMPONENTS: &[ComponentSpec] = &[
         default_tag: "dev",
         deps: &[],
         versionable: false,
+        containers: &[("faucet", "signet-faucet")],
         requested: |c| c.faucet,
     },
     ComponentSpec {
@@ -81,6 +87,7 @@ pub const COMPONENTS: &[ComponentSpec] = &[
         default_tag: "v3.3.1",
         deps: &["electrs"],
         versionable: true,
+        containers: &[("explorer", "mempool/backend"), ("explorer-web", "mempool/frontend")],
         requested: |c| c.explorer,
     },
 ];
@@ -174,6 +181,28 @@ fn patch_images(
             container.image = Some(image.clone());
         }
     }
+}
+
+/// Component-keyed resolved images → container-keyed patch set. Multi-
+/// container pods take the same tag on each container's own repo
+/// (mempool backend and frontend ship as a matched pair).
+fn container_images(images: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut patched = BTreeMap::new();
+    for (key, image) in images {
+        match COMPONENTS.iter().find(|s| s.key == key) {
+            Some(spec) => {
+                let tag = image.rsplit(':').next().unwrap_or(image);
+                for (container, repo) in spec.containers {
+                    patched.insert(container.to_string(), format!("{repo}:{tag}"));
+                }
+            }
+            // bitcoind, signer: the container name equals the key.
+            None => {
+                patched.insert(key.clone(), image.clone());
+            }
+        }
+    }
+    patched
 }
 
 pub fn namespace_for(env_id: &str) -> String {
@@ -604,6 +633,7 @@ impl Orchestrator {
         manifest: &str,
         images: &BTreeMap<String, String>,
     ) -> Result<(), OrchestrateError> {
+        let patch = container_images(images);
         for value in Self::parse_docs(manifest)? {
             let kind = value["kind"].as_str().ok_or_else(|| {
                 let preview = serde_yaml::to_string(&value).unwrap_or_default();
@@ -621,7 +651,7 @@ impl Orchestrator {
                     let mut sts: StatefulSet = serde_yaml::from_value(value)?;
                     sts.metadata.namespace = Some(ns.to_string());
                     if let Some(pod) = sts.spec.as_mut().and_then(|s| s.template.spec.as_mut()) {
-                        patch_images(&mut pod.containers, images);
+                        patch_images(&mut pod.containers, &patch);
                     }
                     Api::namespaced(self.client.clone(), ns)
                         .create(&PostParams::default(), &sts)
@@ -638,7 +668,7 @@ impl Orchestrator {
                     let mut dep: Deployment = serde_yaml::from_value(value)?;
                     dep.metadata.namespace = Some(ns.to_string());
                     if let Some(pod) = dep.spec.as_mut().and_then(|s| s.template.spec.as_mut()) {
-                        patch_images(&mut pod.containers, images);
+                        patch_images(&mut pod.containers, &patch);
                     }
                     Api::namespaced(self.client.clone(), ns)
                         .create(&PostParams::default(), &dep)
@@ -902,6 +932,40 @@ mod tests {
             let mut out = Vec::new();
             write_compact_size(&mut out, len as usize);
             assert_eq!(out, expected, "len {len}");
+        }
+    }
+
+    #[test]
+    fn explorer_version_pins_backend_and_frontend_together() {
+        let images = resolve_images(&Some(BTreeMap::from([(
+            "explorer".to_string(),
+            "v3.3.0".to_string(),
+        )])))
+        .unwrap();
+        // the bundle echo stays component-keyed per spec §12
+        assert!(!images.contains_key("explorer-web"));
+
+        let patch = container_images(&images);
+        assert_eq!(patch.get("explorer").unwrap(), "mempool/backend:v3.3.0");
+        assert_eq!(patch.get("explorer-web").unwrap(), "mempool/frontend:v3.3.0");
+
+        let docs = Orchestrator::parse_docs(EXPLORER_MANIFEST).unwrap();
+        let mut deployment: Deployment = serde_yaml::from_value(docs[0].clone()).unwrap();
+        let pod = deployment
+            .spec
+            .as_mut()
+            .unwrap()
+            .template
+            .spec
+            .as_mut()
+            .unwrap();
+        patch_images(&mut pod.containers, &patch);
+        for (name, image) in [
+            ("explorer", "mempool/backend:v3.3.0"),
+            ("explorer-web", "mempool/frontend:v3.3.0"),
+        ] {
+            let container = pod.containers.iter().find(|c| c.name == name).unwrap();
+            assert_eq!(container.image.as_deref(), Some(image));
         }
     }
 
