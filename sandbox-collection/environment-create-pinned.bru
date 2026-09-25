@@ -1,0 +1,38 @@
+meta {
+  name: environment.create (pinned + ttl)
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{rpc_url}}
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{bearer}}
+}
+
+body:json {
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "environment.create",
+    "params": {
+      "name": "bruno-pinned",
+      "components": { "indexer": true, "explorer": true, "faucet": false },
+      "versions": { "bitcoind": "29.4", "electrs": "0.10.9", "explorer": "v3.3.0" },
+      "ttl_secs": 3600
+    }
+  }
+}
+
+script:post-response {
+  const envId = res.body?.result?.environment_id;
+  if (envId) {
+    bru.setEnvVar("env_id", envId);
+    console.log("env_id captured:", envId);
+  }
+}
