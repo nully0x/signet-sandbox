@@ -138,9 +138,12 @@ for the exact URL you call.
 
 The `signet-cli` crate is a thin JSON-RPC client for the same surface —
 `up` provisions, polls until ready, and prints the connection bundle;
-`get`/`fund`/`down` map to their RPC methods. Credentials come from flags
-or the environment: `--token`/`SIGNET_TOKEN` (bearer, from the mint above)
-or `--nsec`/`SIGNET_NSEC` (NIP-98, signed fresh per request):
+`ls` lists your environments; `stop`/`start` suspend/resume compute
+(storage persists); `get`/`fund`/`down` map to their RPC methods; `schema`
+prints the config JSON Schema. Environment arguments take an id **or**
+the environment name — names resolve server-side. Credentials come from
+flags or the environment: `--token`/`SIGNET_TOKEN` (bearer, from the mint
+above) or `--nsec`/`SIGNET_NSEC` (NIP-98, signed fresh per request):
 
 ```bash
 cat > sandbox.json <<'EOF'
@@ -150,8 +153,11 @@ cat > sandbox.json <<'EOF'
 }
 EOF
 SIGNET_TOKEN=sgn_... cargo run -p signet-cli -- up --config ./sandbox.json --ttl 20m
-SIGNET_TOKEN=sgn_... cargo run -p signet-cli -- fund <env-id> <address> --amount 500000
-SIGNET_TOKEN=sgn_... cargo run -p signet-cli -- down <env-id>
+SIGNET_TOKEN=sgn_... cargo run -p signet-cli -- ls
+SIGNET_TOKEN=sgn_... cargo run -p signet-cli -- stop cli-env
+SIGNET_TOKEN=sgn_... cargo run -p signet-cli -- start cli-env
+SIGNET_TOKEN=sgn_... cargo run -p signet-cli -- fund cli-env <address> --amount 500000
+SIGNET_TOKEN=sgn_... cargo run -p signet-cli -- down cli-env
 ```
 
 Add `--json` for machine-readable output (the raw result object). The NIP-98

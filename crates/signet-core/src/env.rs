@@ -1,8 +1,9 @@
 use chrono::{DateTime, Utc};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, JsonSchema, Serialize, Deserialize)]
 pub struct CreateParams {
     pub name: String,
     #[serde(default)]
@@ -15,7 +16,7 @@ pub struct CreateParams {
     pub ttl_secs: Option<i64>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, JsonSchema, Serialize, Deserialize)]
 pub struct Components {
     #[serde(default)]
     pub explorer: bool,
@@ -25,7 +26,7 @@ pub struct Components {
     pub faucet: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 pub enum BlockPolicy {
     #[serde(rename = "interval_30s")]
     Interval30s,

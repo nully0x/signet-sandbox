@@ -85,15 +85,34 @@ enum Command {
     },
     /// Fetch an environment's connection bundle
     Get {
-        /// Environment id (UUID)
-        env_id: String,
+        /// Environment id or name
+        env: String,
+        #[command(flatten)]
+        common: Common,
+    },
+    /// List your environments
+    Ls {
+        #[command(flatten)]
+        common: Common,
+    },
+    /// Suspend an environment's compute (storage persists)
+    Stop {
+        /// Environment id or name
+        env: String,
+        #[command(flatten)]
+        common: Common,
+    },
+    /// Resume a stopped environment
+    Start {
+        /// Environment id or name
+        env: String,
         #[command(flatten)]
         common: Common,
     },
     /// Fund an address from the environment's faucet
     Fund {
-        /// Environment id (UUID)
-        env_id: String,
+        /// Environment id or name
+        env: String,
         /// Destination signet address
         address: String,
         /// Amount to mint, in sats
@@ -104,8 +123,8 @@ enum Command {
     },
     /// Destroy an environment
     Down {
-        /// Environment id (UUID)
-        env_id: String,
+        /// Environment id or name
+        env: String,
         #[command(flatten)]
         common: Common,
     },
@@ -114,6 +133,8 @@ enum Command {
         #[command(flatten)]
         common: Common,
     },
+    /// Print the JSON Schema for the environment config (spec §5)
+    Schema {},
 }
 
 #[derive(Args)]
@@ -147,15 +168,19 @@ fn run(command: Command) -> u8 {
             poll_secs,
             common,
         } => up(config, name, ttl, timeout_secs, poll_secs, &common),
-        Command::Get { env_id, common } => get(&env_id, &common),
+        Command::Get { env, common } => get(&env, &common),
+        Command::Ls { common } => ls(&common),
+        Command::Stop { env, common } => lifecycle("environment.stop", &env, &common),
+        Command::Start { env, common } => lifecycle("environment.start", &env, &common),
         Command::Fund {
-            env_id,
+            env,
             address,
             amount,
             common,
-        } => fund(&env_id, &address, amount, &common),
-        Command::Down { env_id, common } => down(&env_id, &common),
+        } => fund(&env, &address, amount, &common),
+        Command::Down { env, common } => down(&env, &common),
         Command::Token { common } => token(&common),
+        Command::Schema {} => schema(),
     };
     match result {
         Ok(()) => 0,
@@ -228,9 +253,9 @@ fn up(
     Ok(())
 }
 
-fn get(env_id: &str, common: &Common) -> Result<(), CliError> {
+fn get(env: &str, common: &Common) -> Result<(), CliError> {
     let client = client(common)?;
-    let bundle = poll_get(&client, env_id)?;
+    let bundle = poll_get(&client, env)?;
     if common.json {
         output::print_json(&bundle)?;
     } else {
@@ -239,11 +264,47 @@ fn get(env_id: &str, common: &Common) -> Result<(), CliError> {
     Ok(())
 }
 
-fn fund(env_id: &str, address: &str, amount: u64, common: &Common) -> Result<(), CliError> {
+fn ls(common: &Common) -> Result<(), CliError> {
+    let client = client(common)?;
+    let result = client.call("environment.list", json!({}))?;
+    if common.json {
+        output::print_json(&result)?;
+        return Ok(());
+    }
+    let rows: Vec<output::ListRow> = serde_json::from_value(result).map_err(unexpected_payload)?;
+    print!("{}", output::render_list(&rows));
+    Ok(())
+}
+
+fn lifecycle(method: &str, env: &str, common: &Common) -> Result<(), CliError> {
+    let client = client(common)?;
+    let result = client.call(method, json!({ "id": env }))?;
+    if common.json {
+        output::print_json(&result)?;
+        return Ok(());
+    }
+    let status = result
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    println!("environment {env}: {status}");
+    if status == "provisioning" {
+        println!("poll with: signet get {env}");
+    }
+    Ok(())
+}
+
+fn schema() -> Result<(), CliError> {
+    let schema = schemars::schema_for!(signet_core::CreateParams);
+    output::print_json(&schema)?;
+    Ok(())
+}
+
+fn fund(env: &str, address: &str, amount: u64, common: &Common) -> Result<(), CliError> {
     let client = client(common)?;
     let result = client.call(
         "environment.faucet",
-        json!({ "id": env_id, "address": address, "amount_sat": amount }),
+        json!({ "id": env, "address": address, "amount_sat": amount }),
     )?;
     if common.json {
         output::print_json(&result)?;
@@ -257,9 +318,9 @@ fn fund(env_id: &str, address: &str, amount: u64, common: &Common) -> Result<(),
     Ok(())
 }
 
-fn down(env_id: &str, common: &Common) -> Result<(), CliError> {
+fn down(env: &str, common: &Common) -> Result<(), CliError> {
     let client = client(common)?;
-    let result = client.call("environment.destroy", json!({ "id": env_id }))?;
+    let result = client.call("environment.destroy", json!({ "id": env }))?;
     if common.json {
         output::print_json(&result)?;
     } else {
@@ -272,7 +333,7 @@ fn down(env_id: &str, common: &Common) -> Result<(), CliError> {
                 "environment.destroy did not confirm destruction"
             )));
         }
-        println!("environment {env_id} destroyed");
+        println!("environment {env} destroyed");
     }
     Ok(())
 }
@@ -303,8 +364,8 @@ fn token(common: &Common) -> Result<(), CliError> {
     Ok(())
 }
 
-fn poll_get(client: &Client, env_id: &str) -> anyhow::Result<ConnectionBundle> {
-    serde_json::from_value(client.call("environment.get", json!({ "id": env_id }))?)
+fn poll_get(client: &Client, env: &str) -> anyhow::Result<ConnectionBundle> {
+    serde_json::from_value(client.call("environment.get", json!({ "id": env }))?)
         .map_err(unexpected_payload)
 }
 
