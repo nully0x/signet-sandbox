@@ -130,8 +130,15 @@ enum Command {
     },
     /// Mint a bearer API token (NIP-98-only; prints the raw token)
     Token {
-        #[command(flatten)]
-        common: Common,
+        /// Nostr secret key (nsec… or hex) that signs the mint request
+        #[arg(long, env = "SIGNET_NSEC")]
+        nsec: Option<String>,
+        /// API base URL
+        #[arg(long, env = "SIGNET_API", default_value = "http://localhost:8081")]
+        api: String,
+        /// Print raw JSON results
+        #[arg(long)]
+        json: bool,
     },
     /// Print the JSON Schema for the environment config (spec §5)
     Schema {},
@@ -179,7 +186,7 @@ fn run(command: Command) -> u8 {
             common,
         } => fund(&env, &address, amount, &common),
         Command::Down { env, common } => down(&env, &common),
-        Command::Token { common } => token(&common),
+        Command::Token { nsec, api, json } => token(nsec, &api, json),
         Command::Schema {} => schema(),
     };
     match result {
@@ -338,25 +345,18 @@ fn down(env: &str, common: &Common) -> Result<(), CliError> {
     Ok(())
 }
 
-fn token(common: &Common) -> Result<(), CliError> {
-    if common.token.is_some() {
-        return Err(CliError::Other(anyhow::anyhow!(
-            "token.create authenticates with NIP-98 only; unset --token / SIGNET_TOKEN"
-        )));
-    }
-    let key = common
-        .nsec
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("no NIP-98 key: pass --nsec or set SIGNET_NSEC"))?;
+fn token(nsec: Option<String>, api: &str, json: bool) -> Result<(), CliError> {
+    let key =
+        nsec.ok_or_else(|| anyhow::anyhow!("no NIP-98 key: pass --nsec or set SIGNET_NSEC"))?;
     let keys = Keys::parse(&key).map_err(|e| anyhow::anyhow!("invalid Nostr secret key: {e}"))?;
-    let client = Client::new(&common.api, Auth::Nip98(keys))?;
+    let client = Client::new(api, Auth::Nip98(keys))?;
     let result = client.call("token.create", json!({}))?;
     let raw = result
         .get("token")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("token.create returned no token"))?
         .to_string();
-    if common.json {
+    if json {
         output::print_json(&result)?;
     } else {
         println!("{raw}");
@@ -444,37 +444,23 @@ mod tests {
     #[test]
     fn token_mints_with_nip98_and_prints_the_raw_token() {
         let base = serve_sequence(vec![rpc_result(r#"{"token":"sgn_00ab"}"#)]);
-        let common = Common {
-            api: base,
-            token: None,
-            nsec: Some("0000000000000000000000000000000000000000000000000000000000000001".into()),
-            json: false,
-        };
-        assert!(token(&common).is_ok(), "token failed");
-    }
-
-    #[test]
-    fn token_rejects_bearer_credentials() {
-        let base = serve_sequence(vec![]);
-        let common = Common {
-            api: base,
-            token: Some("sgn_t".into()),
-            nsec: None,
-            json: false,
-        };
-        assert!(token(&common).is_err());
+        let key = "0000000000000000000000000000000000000000000000000000000000000001";
+        assert!(
+            token(Some(key.into()), &base, false).is_ok(),
+            "token failed"
+        );
     }
 
     #[test]
     fn token_requires_a_nip98_key() {
         let base = serve_sequence(vec![]);
-        let common = Common {
-            api: base,
-            token: None,
-            nsec: None,
-            json: false,
-        };
-        assert!(token(&common).is_err());
+        assert!(token(None, &base, false).is_err());
+    }
+
+    #[test]
+    fn token_rejects_an_invalid_key() {
+        let base = serve_sequence(vec![]);
+        assert!(token(Some("zzz".into()), &base, false).is_err());
     }
 
     #[test]

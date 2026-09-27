@@ -12,6 +12,10 @@ pub enum Auth {
 }
 
 pub fn from_flags(token: Option<String>, nsec: Option<String>) -> anyhow::Result<Auth> {
+    // An empty env var (e.g. a failed `export TOKEN=$(just get-token)`)
+    // counts as unset, not as a credential.
+    let token = token.filter(|t| !t.is_empty());
+    let nsec = nsec.filter(|k| !k.is_empty());
     match (token, nsec) {
         (Some(_), Some(_)) => {
             anyhow::bail!("use --token or --nsec, not both")
@@ -104,5 +108,14 @@ mod tests {
     fn flags_require_exactly_one_credential() {
         assert!(from_flags(None, None).is_err());
         assert!(from_flags(Some("sgn_x".into()), Some(test_key())).is_err());
+    }
+
+    #[test]
+    fn empty_env_values_count_as_unset() {
+        assert!(matches!(
+            from_flags(Some(String::new()), Some(test_key())).unwrap(),
+            Auth::Nip98(_)
+        ));
+        assert!(from_flags(Some(String::new()), None).is_err());
     }
 }
