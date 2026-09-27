@@ -2534,6 +2534,7 @@ dependencies = [
  "clap",
  "nostr",
  "reqwest",
+ "schemars",
  "serde",
  "serde_json",
  "signet-core",
@@ -2547,6 +2548,7 @@ name = "signet-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror",
