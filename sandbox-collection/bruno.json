@@ -1,0 +1,6 @@
+{
+  "version": "1",
+  "name": "signet sandbox",
+  "type": "collection",
+  "ignore": ["node_modules", ".git"]
+}

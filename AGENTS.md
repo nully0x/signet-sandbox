@@ -16,16 +16,18 @@ Enter the devshell first (pins k3d, kubectl, cargo, just, sqlx-cli, node):
 
     nix develop
 
-Machine bootstrap (one-time, sudo once — rootful podman socket for k3d):
+The nix devshell provides all repo tooling, including the docker client.
+The docker daemon is the one per-platform prerequisite: install it yourself
+(Docker Desktop, colima, or OrbStack on macOS; the distro package on Linux).
+Then verify with:
 
     just doctor       # what is missing on this machine
-    just host-setup   # socket permissions only; never needed again
 
 Cluster + image operations need no sudo and are separate concerns:
 
     just cluster-up                  # k3d create + gateway stack (no sudo)
-    just images-import IMG...        # rootless podman build -> cluster
-    just db-up / db-down             # postgres (rootless podman)
+    just images-import IMG...        # docker build -> cluster
+    just db-up / db-down             # postgres (docker)
 
 Local dev loop:
 
@@ -38,9 +40,7 @@ Local dev loop:
     just verify-all         # build + workspace tests — run before calling work done
 
 Cluster (k3d, no sudo): `just cluster-up / cluster-down / images-import`.
-Images build with rootless podman — docker operations stay separate from
-cluster operations. The cluster runs on the ROOTFUL podman socket; see
-gotcha 17.
+Images build with docker and ship to the cluster via `images-import`.
 
 Long-running or stateful commands (k3d/kubectl provisioning, docker builds,
 image imports, dev servers) are run by the user, not the agent: agent tool
@@ -66,7 +66,8 @@ output redirected to a log and polled.
 
 ## Conventions
 
-- Wire protocol: JSON-RPC 2.0 over `POST /rpc`, methods `environment.*`.
+- Wire protocol: JSON-RPC 2.0 over `POST /v1/rpc`, methods `environment.*`,
+  `token.*`.
   Failures are JSON-RPC error objects (codes in `signet-rpc/src/error.rs`),
   never HTTP status semantics.
 - serde `snake_case` for wire types.
@@ -174,7 +175,11 @@ Lock files, generated files, and vendored code get their own commits.
     `signet-secrets/SIGNET_MAGIC` and the electrs STS reads
     `ELECTRS_MAGIC` from there. Auth is `--cookie-file` only (no inline
     `--cookie` in 0.11+); sync is p2p-only (`--jsonrpc-import` was
-    removed; `ELECTRS_JSONRPC_IMPORT` is silently ignored).
+    removed; `ELECTRS_JSONRPC_IMPORT` is silently ignored). Building
+    pre-0.11 tags needs `--build-arg SYSTEM_ROCKSDB=0`: trixie's
+    librocksdb 9.x headers do not match the old electrs-rocksdb fork,
+    so the vendored rocksdb source must compile instead (slow build,
+    needs docker RAM).
 16. **Gateway coexistence and klipper host ports.** Envoy Gateway is the
     edge (see docs/GATEWAY.md); Traefik coexists until the cluster
     recreate. Two LoadBalancer Services claiming host port 80 on one node
@@ -186,14 +191,3 @@ Lock files, generated files, and vendored code get their own commits.
     Gateway's namespace. EG ships its own gateway-api CRDs (supersede the
     manual standard install). Multi-node production requires MetalLB —
     klipper has no VIP or failover.
-17. **Rootless podman cannot host the cluster; rootful socket is the
-    answer.** k3s v1.32 in a rootless container dies twice: first on
-    cpuset delegation (fixable via a `user@.service` drop-in +
-    re-login), then fatally at kubelet — `open /dev/kmsg: operation not
-    permitted` — because kubelet wants CAP_SYSLOG, which no rootless
-    container gets. The supported setup is k3d against the ROOTFUL
-    podman system socket (`/run/podman/podman.sock`, SocketMode 0666 via
-    `just host-setup`, symlinked from `/var/run/docker.sock`): cluster
-    ops then need no sudo. Podman stays rootless for image builds;
-    `podman save` tars are portable — import them into the cluster with
-    `k3d image import` regardless of runtime.

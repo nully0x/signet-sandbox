@@ -21,65 +21,41 @@ bundle out, `ttl`-based teardown when you're done.
 
 ## How it works
 
-The provisioning API (Axum, JSON-RPC 2.0 over `POST /rpc`) authenticates
+The provisioning API (Axum, JSON-RPC 2.0 over `POST /v1/rpc`) authenticates
 callers via NIP-98 signed Nostr events or hashed API tokens, persists
 environments in Postgres, and orchestrates the cluster with kube-rs. Each
 environment is a namespace containing a bitcoind StatefulSet and a block
 signer deployment driven by embedded manifests; destroying an environment
 deletes the namespace, cascading everything in it. Teams configure which
 components they need and pin component versions (e.g. a specific bitcoind
-release) per environment.
+release) per environment. Environments created with a `ttl` carry an
+`expires-at` annotation that a background reaper enforces.
 
-## Running it
+Failures are JSON-RPC error objects (`-32002` unauthenticated, `-32004` not
+the owner, …), never HTTP status semantics. Owners can issue long-lived API
+tokens (`sgn_...`) for CI pipelines where signing every request isn't
+practical.
 
-Prerequisites: Docker, and [Nix](https://nixos.org) with flakes enabled — the
-flake pins the toolchain (cargo, k3d, kubectl, just, sqlx-cli, node).
+## Status
 
-```bash
-nix develop
-
-# local loop: compose bitcoind + postgres, native signer and API
-just local-setup          # generates .env + deploy/compose/bitcoin.conf
-just dev-up               # bitcoind + postgres (docker compose)
-just dev-signer           # native signer; premines 101, then a block every 30s
-just dev-api              # provisioning API on :8080
-
-# cluster loop: k3d + one namespace per provisioned environment
-just cluster-up
-```
-
-Example — create an environment (every request needs a NIP-98 signed Nostr
-event as the `Authorization` header; mint one for manual testing):
-
-```bash
-HDR=$(cargo run -q -p signet-nostr --example nip98 -- \
-    http://localhost:8080/v1/rpc POST 0000...<64-hex-secret> | tail -1)
-
-curl -s -X POST localhost:8080/v1/rpc \
-    -H 'content-type: application/json' -H "$HDR" \
-    -d '{"jsonrpc":"2.0","id":1,"method":"environment.create",
-         "params":{"name":"my-env","versions":{"bitcoind":"29.4"}}}'
-```
-
-Failures are JSON-RPC error objects (`-32002` unauthenticated,
-`-32004` not the owner, …), never HTTP status semantics. Owners can issue
-long-lived API tokens (`sgn_...`) for CI pipelines where signing every
-request isn't practical.
-
-## Contributing
-
-```bash
-nix develop
-just verify-all     # build + workspace tests — the bar for every change
-```
-
-Make sure `just verify-all` passes before opening a PR. Commits are small and
-atomic with conventional prefixes (`feat:`, `fix:`, `docs:`, …). Agent
-contributors have additional operational rules in `AGENTS.md`.
+The MVP path is checkpoint-driven: auth, in-cluster provisioning, faucet,
+indexer + explorer behind Envoy Gateway, TTL reaper — see
+[docs/CHECKPOINTS.md](docs/CHECKPOINTS.md) for the live plan and
+[docs/SIGNET_SANDBOX_SPEC.md](docs/SIGNET_SANDBOX_SPEC.md) for the
+specification it implements.
 
 ## Documentation
 
+- [`docs/DEV.md`](docs/DEV.md) — running and operating in dev mode
+- [`docs/CHECKPOINTS.md`](docs/CHECKPOINTS.md) — implementation plan with gates
+- [`docs/SIGNET_SANDBOX_SPEC.md`](docs/SIGNET_SANDBOX_SPEC.md) — technical specification
 - [`AGENTS.md`](AGENTS.md) — operational guide for coding agents
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). The short version: `just
+verify-all` is the bar, docs move with the change, commits are small and
+conventional.
 
 ## License
 

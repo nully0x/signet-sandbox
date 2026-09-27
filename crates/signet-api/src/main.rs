@@ -1,6 +1,7 @@
 mod rpc;
 
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
@@ -28,6 +29,22 @@ struct Args {
 
     #[arg(long, env = "DATABASE_URL")]
     database_url: String,
+
+    #[arg(
+        long,
+        env = "SIGNET_REAPER_INTERVAL_SECS",
+        default_value_t = 60,
+        help = "Reaper pass interval in seconds; 0 disables the reaper"
+    )]
+    reaper_interval_secs: u64,
+
+    #[arg(
+        long,
+        env = "SIGNET_NIP98_MAX_AGE_SECS",
+        default_value_t = 300,
+        help = "NIP-98 acceptance window in seconds; 0 disables expiry (dev only)"
+    )]
+    nip98_max_age_secs: u64,
 }
 
 #[tokio::main]
@@ -45,7 +62,38 @@ async fn main() -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("kube client: {e}"))?;
 
-    let app = rpc::router(pool, orchestrator, args.public_url);
+    if args.nip98_max_age_secs == 0 {
+        tracing::warn!(
+            "NIP-98 expiry disabled (SIGNET_NIP98_MAX_AGE_SECS=0): dev only, do not deploy"
+        );
+    }
+
+    if args.reaper_interval_secs > 0 {
+        let reaper = orchestrator.clone();
+        let interval = std::time::Duration::from_secs(args.reaper_interval_secs);
+        tracing::info!(interval_secs = args.reaper_interval_secs, "reaper enabled");
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(interval).await;
+                if let Err(e) = reaper.reap_expired().await {
+                    tracing::warn!(error = %e, "reaper pass failed");
+                }
+            }
+        });
+    } else {
+        tracing::info!("reaper disabled");
+    }
+
+    let app = rpc::router(
+        pool,
+        orchestrator,
+        args.public_url,
+        if args.nip98_max_age_secs == 0 {
+            None
+        } else {
+            Some(Duration::from_secs(args.nip98_max_age_secs))
+        },
+    );
 
     let listener = tokio::net::TcpListener::bind(args.listen).await?;
     tracing::info!(listen = %args.listen, "signet-api listening");

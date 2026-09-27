@@ -136,6 +136,21 @@ pub struct ApiTokenRow {
     pub revoked: bool,
 }
 
+pub async fn insert_api_token(
+    pool: &PgPool,
+    token_hash: &str,
+    npub_owner: &str,
+) -> Result<(), DbError> {
+    sqlx::query("insert into api_tokens (id, npub_owner, token_hash) values ($1, $2, $3)")
+        .bind(Uuid::now_v7())
+        .bind(npub_owner)
+        .bind(token_hash)
+        .execute(pool)
+        .await
+        .map_err(DbError::from)?;
+    Ok(())
+}
+
 pub async fn find_api_token(
     pool: &PgPool,
     token_hash: &str,

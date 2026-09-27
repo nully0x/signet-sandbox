@@ -55,7 +55,7 @@ pub fn verify_nip98_header(
     header: &str,
     url: &str,
     method: &str,
-    max_age: Duration,
+    max_age: Option<Duration>,
 ) -> Result<String, Nip98Error> {
     let event = parse_nip98_header(header)?;
     let pubkey = verify_http_auth(&event, url, method, Timestamp::now(), max_age)?;
@@ -134,7 +134,7 @@ pub fn verify_http_auth(
     url: &str,
     method: &str,
     now: Timestamp,
-    max_age: Duration,
+    max_age: Option<Duration>,
 ) -> Result<PublicKey, Nip98Error> {
     event.verify()?;
 
@@ -142,8 +142,9 @@ pub fn verify_http_auth(
         return Err(Nip98Error::WrongKind);
     }
 
-    if event.created_at > now + MAX_FUTURE_SKEW
-        || now - event.created_at > Timestamp::from_secs(max_age.as_secs())
+    if let Some(max_age) = max_age
+        && (event.created_at > now + MAX_FUTURE_SKEW
+            || now - event.created_at > Timestamp::from_secs(max_age.as_secs()))
     {
         return Err(Nip98Error::Stale);
     }
@@ -208,7 +209,23 @@ mod tests {
     }
 
     fn verify(event: &Event) -> Result<PublicKey, Nip98Error> {
-        verify_http_auth(event, URL, "POST", Timestamp::now(), MAX_AGE)
+        verify_http_auth(event, URL, "POST", Timestamp::now(), Some(MAX_AGE))
+    }
+
+    fn verify_without_window(event: &Event) -> Result<PublicKey, Nip98Error> {
+        verify_http_auth(event, URL, "POST", Timestamp::now(), None)
+    }
+
+    #[test]
+    fn no_max_age_accepts_events_outside_the_window() {
+        let keys = Keys::generate();
+        let hour_old = signed(
+            &keys,
+            Timestamp::now() - Duration::from_secs(3600),
+            vec![Tag::custom("u", [URL]), Tag::custom("method", ["POST"])],
+        );
+        assert!(verify(&hour_old).is_err());
+        assert!(verify_without_window(&hour_old).is_ok());
     }
 
     #[test]
@@ -390,7 +407,7 @@ mod tests {
     fn nip98_header_round_trips_to_npub() {
         let keys = keys(2);
         let header = nip98_header(&auth_event(&keys));
-        let npub = verify_nip98_header(&header, URL, "POST", MAX_AGE).unwrap();
+        let npub = verify_nip98_header(&header, URL, "POST", Some(MAX_AGE)).unwrap();
         assert_eq!(npub, keys.public_key().to_bech32().unwrap());
     }
 
@@ -398,7 +415,7 @@ mod tests {
     fn nip98_header_rejects_garbage() {
         for header in ["", "Nostr", "nostr abcd", "Nostr !!!not-base64!!!"] {
             assert!(
-                verify_nip98_header(header, URL, "POST", MAX_AGE).is_err(),
+                verify_nip98_header(header, URL, "POST", Some(MAX_AGE)).is_err(),
                 "accepted {header:?}"
             );
         }
@@ -418,7 +435,7 @@ mod tests {
             event.sig,
         );
         assert!(matches!(
-            verify_nip98_header(&nip98_header(&tampered), URL, "POST", MAX_AGE),
+            verify_nip98_header(&nip98_header(&tampered), URL, "POST", Some(MAX_AGE)),
             Err(Nip98Error::BadEvent(_))
         ));
     }

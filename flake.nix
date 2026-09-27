@@ -26,6 +26,7 @@
           packages = with pkgs; [
             rustToolchain
             cargo-nextest
+            docker
             k3d
             kubectl
             kubernetes-helm

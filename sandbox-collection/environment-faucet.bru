@@ -1,0 +1,29 @@
+meta {
+  name: environment.faucet
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{rpc_url}}
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{bearer}}
+}
+
+body:json {
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "environment.faucet",
+    "params": {
+      "id": "{{env_id}}",
+      "address": "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+      "amount_sat": 1000000
+    }
+  }
+}
