@@ -488,6 +488,15 @@ impl Orchestrator {
         self.delete_env_namespace(&namespace_for(env_id)).await
     }
 
+    /// Whether the environment's namespace still exists. Handlers use this
+    /// to reconcile rows whose cluster state a reap removed behind their back.
+    pub async fn environment_exists(&self, env_id: &str) -> Result<bool, OrchestrateError> {
+        let ns = Api::<Namespace>::all(self.client.clone())
+            .get_opt(&namespace_for(env_id))
+            .await?;
+        Ok(ns.is_some())
+    }
+
     /// Scale every workload in the environment namespace. `start` assumes
     /// one replica per workload, which is all the stack ever runs.
     pub async fn set_workload_replicas(

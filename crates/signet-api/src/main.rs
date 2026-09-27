@@ -70,13 +70,32 @@ async fn main() -> anyhow::Result<()> {
 
     if args.reaper_interval_secs > 0 {
         let reaper = orchestrator.clone();
+        let pool = pool.clone();
         let interval = std::time::Duration::from_secs(args.reaper_interval_secs);
         tracing::info!(interval_secs = args.reaper_interval_secs, "reaper enabled");
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(interval).await;
-                if let Err(e) = reaper.reap_expired().await {
-                    tracing::warn!(error = %e, "reaper pass failed");
+                match reaper.reap_expired().await {
+                    Ok(namespaces) => {
+                        for ns in namespaces {
+                            // The row must follow the cluster: a reaped env
+                            // must never look startable in the database.
+                            let short_id = ns.trim_start_matches("env-");
+                            match signet_db::mark_expired_by_short_id(&pool, short_id).await {
+                                Ok(1) => {
+                                    tracing::info!(namespace = %ns, "marked reaped environment expired")
+                                }
+                                Ok(_) => {
+                                    tracing::warn!(namespace = %ns, "reaped namespace has no matching environment row")
+                                }
+                                Err(e) => {
+                                    tracing::warn!(error = %e, namespace = %ns, "expired status update failed")
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => tracing::warn!(error = %e, "reaper pass failed"),
                 }
             }
         });
