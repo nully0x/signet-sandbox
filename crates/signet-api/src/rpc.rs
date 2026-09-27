@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 use signet_core::bundle::ConnectionBundle;
-use signet_core::env::{BlockPolicy, EnvStatus};
+use signet_core::env::{BlockPolicy, CreateParams, EnvStatus};
 use signet_db::{EnvironmentRow, PgPool};
 use signet_nostr::{ApiToken, verify_nip98_header};
 use signet_orchestrator::{EnvComponents, EnvSecrets, Orchestrator};
@@ -17,7 +17,6 @@ use signet_rpc::error::{
     ENV_NOT_FOUND, Error, FAUCET_FAILED, FORBIDDEN, INTERNAL_ERROR, INVALID_ADDRESS,
     INVALID_PARAMS, INVALID_REQUEST, NOT_AVAILABLE_IN_PHASE, PARSE_ERROR, UNAUTHENTICATED,
 };
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
@@ -184,29 +183,6 @@ async fn token_create(state: &AppState, id: Id, caller: Caller) -> Response {
             Response::error(Some(id), Error::new(INTERNAL_ERROR, "token persist failed"))
         }
     }
-}
-
-#[derive(Deserialize)]
-struct CreateParams {
-    name: String,
-    #[serde(default)]
-    block_policy: Option<BlockPolicy>,
-    #[serde(default)]
-    components: Components,
-    #[serde(default)]
-    versions: Option<BTreeMap<String, String>>,
-    #[serde(default)]
-    ttl_secs: Option<i64>,
-}
-
-#[derive(Deserialize, Default)]
-struct Components {
-    #[serde(default)]
-    explorer: bool,
-    #[serde(default)]
-    indexer: bool,
-    #[serde(default)]
-    faucet: bool,
 }
 
 #[derive(Deserialize)]

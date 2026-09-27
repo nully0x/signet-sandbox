@@ -117,6 +117,30 @@ to `.env`). Signature, URL, and method checks stay on; use the default
 window anywhere untrusted. The header must still be minted for the exact
 URL you call.
 
+### CLI (`signet`)
+
+The `signet-cli` crate is a thin JSON-RPC client for the same surface —
+`up` provisions, polls until ready, and prints the connection bundle;
+`get`/`fund`/`down` map to their RPC methods. Credentials come from flags
+or the environment: `--token`/`SIGNET_TOKEN` (bearer, from the mint above)
+or `--nsec`/`SIGNET_NSEC` (NIP-98, signed fresh per request):
+
+```bash
+cat > sandbox.json <<'EOF'
+{
+  "name": "cli-env",
+  "components": { "explorer": true, "indexer": true, "faucet": true }
+}
+EOF
+SIGNET_TOKEN=sgn_... cargo run -p signet-cli -- up --config ./sandbox.json --ttl 20m
+SIGNET_TOKEN=sgn_... cargo run -p signet-cli -- fund <env-id> <address> --amount 500000
+SIGNET_TOKEN=sgn_... cargo run -p signet-cli -- down <env-id>
+```
+
+Add `--json` for machine-readable output (the raw result object). The NIP-98
+path signs the exact URL it calls, so `--api` must match the server's
+`public_url` byte for byte.
+
 Provision directly against the cluster without the API (useful for
 orchestrator gates):
 
