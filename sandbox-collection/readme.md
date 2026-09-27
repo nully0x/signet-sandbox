@@ -10,16 +10,15 @@ token minted from the terminal.
    `rpc_url` and `api_base` to your dev box address, e.g.
    `http://100.86.190.9:8081` (tailscale) or the LAN IP.
 3. Mint a bearer token on the dev box — one command, prints only the
-   token (see also `docs/DEV.md`):
+   token:
 
    ```bash
-   SECRET=<64-hex secret key>
-   HDR=$(cargo run -q -p signet-nostr --example nip98 -- \
-       http://localhost:8081/v1/rpc POST "$SECRET" | tail -1)
-   curl -s -X POST localhost:8081/v1/rpc \
-       -H 'content-type: application/json' -H "$HDR" \
-       -d '{"jsonrpc":"2.0","id":1,"method":"token.create"}' | jq -r .result.token
+   just get-token
    ```
+
+   It signs `token.create` with the dev NIP-98 key from `.env`.
+   No just? `cargo run -p signet-cli -- token` does the same. The
+   manual curl flow lives in `docs/DEV.md`.
 
 4. Paste the printed `sgn_...` into the `bearer` variable. Never paste
    NIP-98 headers into API tools — the signed event wraps across
@@ -29,8 +28,20 @@ token minted from the terminal.
 
 ## Notes
 
+- Every `id` parameter accepts the environment UUID **or** the
+  environment's name — names resolve server-side, scoped to the
+  caller's npub.
+- All environment methods are owner-only: another npub gets `-32004`,
+  including `environment.get` (bundles carry live credentials).
+- Lifecycle: **environment.stop** suspends compute (status `stopped`,
+  storage persists); **environment.start** resumes it (status flips
+  back to `ready` via `environment.get` once bitcoind passes
+  readiness). Stop requires `ready`; start requires `stopped`.
+- **environment.list** returns the caller's environments: id, name,
+  status, created/expires timestamps.
 - Failures are JSON-RPC errors inside HTTP 200: check the body's `error`
-  (`-32002` unauthenticated, `-32004` not owner, `-32602` invalid params).
+  (`-32002` unauthenticated, `-32004` not owner, `-32602` invalid
+  params, `-32030` wrong lifecycle state).
 - The pinned create needs the versioned images imported into the cluster
   (see `docs/DEV.md`); otherwise use the default create.
 - The faucet body's address is a placeholder — use any address valid for
