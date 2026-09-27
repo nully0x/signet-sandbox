@@ -3,10 +3,11 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use k8s_openapi::api::apps::v1::{Deployment, StatefulSet};
 use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Secret, Service};
-use kube::api::{Api, ObjectMeta, PostParams};
+use kube::api::{Api, ListParams, ObjectMeta, Patch, PatchParams, PostParams};
 use kube::core::{ApiResource, DynamicObject};
 use kube::{Client, Error};
 use serde::Deserialize;
+use serde_json::json;
 use serde_yaml::Value;
 
 mod reaper;
@@ -485,6 +486,40 @@ impl Orchestrator {
 
     pub async fn destroy_environment(&self, env_id: &str) -> Result<(), OrchestrateError> {
         self.delete_env_namespace(&namespace_for(env_id)).await
+    }
+
+    /// Scale every workload in the environment namespace. `start` assumes
+    /// one replica per workload, which is all the stack ever runs.
+    pub async fn set_workload_replicas(
+        &self,
+        env_id: &str,
+        replicas: i32,
+    ) -> Result<(), OrchestrateError> {
+        let ns = namespace_for(env_id);
+        self.scale_all::<StatefulSet>(&ns, replicas).await?;
+        self.scale_all::<Deployment>(&ns, replicas).await?;
+        Ok(())
+    }
+
+    async fn scale_all<K>(&self, ns: &str, replicas: i32) -> Result<(), OrchestrateError>
+    where
+        K: kube::Resource<Scope = kube::core::NamespaceResourceScope>,
+        K::DynamicType: Default,
+        K: Clone + serde::de::DeserializeOwned + std::fmt::Debug,
+    {
+        let api = Api::<K>::namespaced(self.client.clone(), ns);
+        for item in api.list(&ListParams::default()).await? {
+            let Some(name) = item.meta().name.clone() else {
+                continue;
+            };
+            api.patch(
+                &name,
+                &PatchParams::default(),
+                &Patch::Strategic(&json!({ "spec": { "replicas": replicas } })),
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     async fn ensure_gateway(&self) -> Result<(), OrchestrateError> {

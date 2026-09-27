@@ -14,7 +14,7 @@ use signet_nostr::{ApiToken, verify_nip98_header};
 use signet_orchestrator::{EnvComponents, EnvSecrets, Orchestrator};
 use signet_rpc::envelope::{Id, Request, Response};
 use signet_rpc::error::{
-    ENV_NOT_FOUND, Error, FAUCET_FAILED, FORBIDDEN, INTERNAL_ERROR, INVALID_ADDRESS,
+    CHAIN_ERROR, ENV_NOT_FOUND, Error, FAUCET_FAILED, FORBIDDEN, INTERNAL_ERROR, INVALID_ADDRESS,
     INVALID_PARAMS, INVALID_REQUEST, NOT_AVAILABLE_IN_PHASE, PARSE_ERROR, UNAUTHENTICATED,
 };
 use std::sync::Arc;
@@ -167,7 +167,10 @@ async fn handle(state: &AppState, caller: Caller, via_nip98: bool, request: Requ
         ),
         "token.create" => token_create(state, id, caller).await,
         "environment.create" => environment_create(state, id, caller, request.params).await,
-        "environment.get" => environment_get(state, id, request.params).await,
+        "environment.list" => environment_list(state, id, caller).await,
+        "environment.get" => environment_get(state, id, caller, request.params).await,
+        "environment.stop" => environment_stop(state, id, caller, request.params).await,
+        "environment.start" => environment_start(state, id, caller, request.params).await,
         "environment.destroy" => environment_destroy(state, id, caller, request.params).await,
         "environment.faucet" => environment_faucet(state, id, caller, request.params).await,
         _ => Response::error(Some(id), Error::method_not_found(&request.method)),
@@ -187,7 +190,48 @@ async fn token_create(state: &AppState, id: Id, caller: Caller) -> Response {
 
 #[derive(Deserialize)]
 struct IdParams {
-    id: Uuid,
+    id: String,
+}
+
+enum EnvRef {
+    Id(Uuid),
+    Name(String),
+}
+
+fn parse_env_ref(raw: &str) -> EnvRef {
+    match Uuid::parse_str(raw) {
+        Ok(id) => EnvRef::Id(id),
+        Err(_) => EnvRef::Name(raw.to_string()),
+    }
+}
+
+/// Resolve an `id` parameter that may be an environment UUID or the
+/// caller's environment name. Name lookups are owner-scoped by
+/// construction; the caller re-checks ownership for the UUID path.
+async fn resolve_environment(
+    state: &AppState,
+    caller: &Caller,
+    raw: &str,
+) -> Result<EnvironmentRow, Error> {
+    let lookup = |row: Option<EnvironmentRow>| {
+        row.ok_or_else(|| Error::new(ENV_NOT_FOUND, format!("environment {raw} not found")))
+    };
+    match parse_env_ref(raw) {
+        EnvRef::Id(id) => lookup(signet_db::get_environment(&state.pool, id).await.map_err(
+            |e| {
+                tracing::error!(error = %e, "environment lookup failed");
+                Error::new(INTERNAL_ERROR, "environment lookup failed")
+            },
+        )?),
+        EnvRef::Name(name) => lookup(
+            signet_db::get_environment_by_name(&state.pool, &caller.npub, &name)
+                .await
+                .map_err(|e| {
+                    tracing::error!(error = %e, "environment lookup failed");
+                    Error::new(INTERNAL_ERROR, "environment lookup failed")
+                })?,
+        ),
+    }
 }
 
 fn resolve_expires_at(
@@ -206,7 +250,7 @@ fn resolve_expires_at(
 
 #[derive(Deserialize)]
 struct FaucetParams {
-    id: Uuid,
+    id: String,
     address: String,
     amount_sat: u64,
 }
@@ -226,6 +270,18 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
         Err(e) => return Response::error(Some(id), Error::new(INVALID_PARAMS, e)),
     };
     let versions_json = serde_json::to_value(&images).ok();
+
+    if let Ok(Some(_)) =
+        signet_db::get_environment_by_name(&state.pool, &caller.npub, &params.name).await
+    {
+        return Response::error(
+            Some(id),
+            Error::new(
+                INVALID_PARAMS,
+                format!("environment name `{}` already in use", params.name),
+            ),
+        );
+    }
 
     let env_id = Uuid::now_v7();
     let key = signet_signer::generate_key();
@@ -298,6 +354,15 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
 
     let row = match signet_db::create_environment(&state.pool, &row).await {
         Ok(row) => row,
+        Err(e) if signet_db::is_unique_violation(&e) => {
+            return Response::error(
+                Some(id),
+                Error::new(
+                    INVALID_PARAMS,
+                    format!("environment name `{}` already in use", params.name),
+                ),
+            );
+        }
         Err(e) => {
             tracing::error!(error = %e, "environment insert failed");
             return Response::error(
@@ -342,31 +407,23 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
     )
 }
 
-async fn environment_get(state: &AppState, id: Id, params: Value) -> Response {
+async fn environment_get(state: &AppState, id: Id, caller: Caller, params: Value) -> Response {
     let params: IdParams = match serde_json::from_value(params) {
         Ok(p) => p,
         Err(e) => return Response::error(Some(id), Error::new(INVALID_PARAMS, e.to_string())),
     };
 
-    let row = match signet_db::get_environment(&state.pool, params.id).await {
-        Ok(Some(row)) => row,
-        Ok(None) => {
-            return Response::error(
-                Some(id),
-                Error::new(
-                    ENV_NOT_FOUND,
-                    format!("environment {} not found", params.id),
-                ),
-            );
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "environment lookup failed");
-            return Response::error(
-                Some(id),
-                Error::new(INTERNAL_ERROR, "environment lookup failed"),
-            );
-        }
+    let row = match resolve_environment(state, &caller, &params.id).await {
+        Ok(row) => row,
+        Err(e) => return Response::error(Some(id), e),
     };
+
+    if row.npub_owner != caller.npub {
+        return Response::error(
+            Some(id),
+            Error::new(FORBIDDEN, "caller is not the environment owner"),
+        );
+    }
 
     let status = if row.status == "provisioning"
         && state
@@ -394,30 +451,144 @@ async fn environment_get(state: &AppState, id: Id, params: Value) -> Response {
     )
 }
 
+async fn environment_list(state: &AppState, id: Id, caller: Caller) -> Response {
+    let rows = match signet_db::list_environments(&state.pool, &caller.npub).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::error!(error = %e, "environment list failed");
+            return Response::error(
+                Some(id),
+                Error::new(INTERNAL_ERROR, "environment list failed"),
+            );
+        }
+    };
+    let items: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| {
+            serde_json::json!({
+                "id": row.id,
+                "name": row.name,
+                "status": status_as_env(&row.status),
+                "created_at": row.created_at,
+                "expires_at": row.expires_at,
+            })
+        })
+        .collect();
+    Response::result(Some(id), serde_json::Value::Array(items))
+}
+
+async fn environment_stop(state: &AppState, id: Id, caller: Caller, params: Value) -> Response {
+    lifecycle_transition(state, id, caller, params, Lifecycle::Stop).await
+}
+
+async fn environment_start(state: &AppState, id: Id, caller: Caller, params: Value) -> Response {
+    lifecycle_transition(state, id, caller, params, Lifecycle::Start).await
+}
+
+enum Lifecycle {
+    Stop,
+    Start,
+}
+
+impl Lifecycle {
+    fn required_status(&self) -> &'static str {
+        match self {
+            Lifecycle::Stop => "ready",
+            Lifecycle::Start => "stopped",
+        }
+    }
+
+    fn replicas(&self) -> i32 {
+        match self {
+            Lifecycle::Stop => 0,
+            Lifecycle::Start => 1,
+        }
+    }
+
+    fn result_status(&self) -> &'static str {
+        match self {
+            Lifecycle::Stop => "stopped",
+            // get flips provisioning -> ready once the workloads pass readiness
+            Lifecycle::Start => "provisioning",
+        }
+    }
+}
+
+async fn lifecycle_transition(
+    state: &AppState,
+    id: Id,
+    caller: Caller,
+    params: Value,
+    transition: Lifecycle,
+) -> Response {
+    let params: IdParams = match serde_json::from_value(params) {
+        Ok(p) => p,
+        Err(e) => return Response::error(Some(id), Error::new(INVALID_PARAMS, e.to_string())),
+    };
+
+    let row = match resolve_environment(state, &caller, &params.id).await {
+        Ok(row) => row,
+        Err(e) => return Response::error(Some(id), e),
+    };
+
+    if row.npub_owner != caller.npub {
+        return Response::error(
+            Some(id),
+            Error::new(FORBIDDEN, "caller is not the environment owner"),
+        );
+    }
+
+    if row.status != transition.required_status() {
+        return Response::error(
+            Some(id),
+            Error::new(
+                CHAIN_ERROR,
+                format!(
+                    "environment is {} (status: {})",
+                    if matches!(transition, Lifecycle::Stop) {
+                        "not ready"
+                    } else {
+                        "not stopped"
+                    },
+                    row.status
+                ),
+            ),
+        );
+    }
+
+    if let Err(e) = state
+        .orchestrator
+        .set_workload_replicas(&short_id(row.id), transition.replicas())
+        .await
+    {
+        tracing::error!(error = %e, "workload scale failed");
+        return Response::error(
+            Some(id),
+            Error::new(INTERNAL_ERROR, "workload scale failed"),
+        );
+    }
+
+    if let Err(e) =
+        signet_db::set_environment_status(&state.pool, row.id, transition.result_status()).await
+    {
+        tracing::error!(error = %e, "environment status update failed");
+    }
+
+    Response::result(
+        Some(id),
+        serde_json::json!({ "id": row.id, "status": transition.result_status() }),
+    )
+}
+
 async fn environment_destroy(state: &AppState, id: Id, caller: Caller, params: Value) -> Response {
     let params: IdParams = match serde_json::from_value(params) {
         Ok(p) => p,
         Err(e) => return Response::error(Some(id), Error::new(INVALID_PARAMS, e.to_string())),
     };
 
-    let row = match signet_db::get_environment(&state.pool, params.id).await {
-        Ok(Some(row)) => row,
-        Ok(None) => {
-            return Response::error(
-                Some(id),
-                Error::new(
-                    ENV_NOT_FOUND,
-                    format!("environment {} not found", params.id),
-                ),
-            );
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "environment lookup failed");
-            return Response::error(
-                Some(id),
-                Error::new(INTERNAL_ERROR, "environment lookup failed"),
-            );
-        }
+    let row = match resolve_environment(state, &caller, &params.id).await {
+        Ok(row) => row,
+        Err(e) => return Response::error(Some(id), e),
     };
 
     if row.npub_owner != caller.npub {
@@ -452,24 +623,9 @@ async fn environment_faucet(state: &AppState, id: Id, caller: Caller, params: Va
         Err(e) => return Response::error(Some(id), Error::new(INVALID_PARAMS, e.to_string())),
     };
 
-    let row = match signet_db::get_environment(&state.pool, params.id).await {
-        Ok(Some(row)) => row,
-        Ok(None) => {
-            return Response::error(
-                Some(id),
-                Error::new(
-                    ENV_NOT_FOUND,
-                    format!("environment {} not found", params.id),
-                ),
-            );
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "environment lookup failed");
-            return Response::error(
-                Some(id),
-                Error::new(INTERNAL_ERROR, "environment lookup failed"),
-            );
-        }
+    let row = match resolve_environment(state, &caller, &params.id).await {
+        Ok(row) => row,
+        Err(e) => return Response::error(Some(id), e),
     };
 
     if row.npub_owner != caller.npub {
@@ -531,6 +687,7 @@ fn policy_as_str(policy: BlockPolicy) -> &'static str {
 fn status_as_env(status: &str) -> EnvStatus {
     match status {
         "ready" => EnvStatus::Ready,
+        "stopped" => EnvStatus::Stopped,
         "expired" => EnvStatus::Expired,
         "destroyed" => EnvStatus::Destroyed,
         _ => EnvStatus::Provisioning,
@@ -673,6 +830,19 @@ mod tests {
     }
 
     #[test]
+    fn parse_env_ref_distinguishes_uuid_from_name() {
+        let id = Uuid::now_v7();
+        assert!(matches!(
+            parse_env_ref(&id.to_string()),
+            EnvRef::Id(parsed) if parsed == id
+        ));
+        assert!(matches!(
+            parse_env_ref("acme-staging"),
+            EnvRef::Name(name) if name == "acme-staging"
+        ));
+    }
+
+    #[test]
     fn create_params_default_components_and_policy() {
         let params: CreateParams =
             serde_json::from_value(serde_json::json!({ "name": "x" })).unwrap();
@@ -701,7 +871,7 @@ mod tests {
             "amount_sat": 1_000
         }))
         .unwrap();
-        assert_eq!(params.id, env_id);
+        assert_eq!(params.id, env_id.to_string());
         assert_eq!(params.amount_sat, 1_000);
 
         for incomplete in [
