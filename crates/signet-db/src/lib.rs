@@ -110,6 +110,41 @@ pub async fn get_environment(pool: &PgPool, id: Uuid) -> Result<Option<Environme
         .map_err(DbError::from)
 }
 
+pub async fn get_environment_by_name(
+    pool: &PgPool,
+    npub_owner: &str,
+    name: &str,
+) -> Result<Option<EnvironmentRow>, DbError> {
+    sqlx::query_as::<_, EnvironmentRow>(
+        "select * from environments where npub_owner = $1 and name = $2",
+    )
+    .bind(npub_owner)
+    .bind(name)
+    .fetch_optional(pool)
+    .await
+    .map_err(DbError::from)
+}
+
+pub async fn list_environments(
+    pool: &PgPool,
+    npub_owner: &str,
+) -> Result<Vec<EnvironmentRow>, DbError> {
+    sqlx::query_as::<_, EnvironmentRow>(
+        "select * from environments where npub_owner = $1 order by created_at desc",
+    )
+    .bind(npub_owner)
+    .fetch_all(pool)
+    .await
+    .map_err(DbError::from)
+}
+
+pub fn is_unique_violation(err: &DbError) -> bool {
+    matches!(
+        err,
+        DbError::Sql(sqlx::Error::Database(db)) if db.code().as_deref() == Some("23505")
+    )
+}
+
 pub async fn set_environment_status(pool: &PgPool, id: Uuid, status: &str) -> Result<(), DbError> {
     sqlx::query("update environments set status = $2 where id = $1")
         .bind(id)

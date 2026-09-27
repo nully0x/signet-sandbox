@@ -85,6 +85,37 @@ local-setup *ARGS:
 dev-api:
     cargo run -p signet-api
 
+# bitcoind + postgres via docker compose (reads .env); waits for healthchecks
+dev-up:
+    docker compose -f deploy/compose/docker-compose.yml --env-file .env up -d --wait
+
+# stop the compose stack (volumes kept)
+dev-down:
+    docker compose -f deploy/compose/docker-compose.yml --env-file .env down
+
+# wipe compose volumes (chain + db) — required after `local-setup --force`
+dev-reset:
+    docker compose -f deploy/compose/docker-compose.yml --env-file .env down -v
+
+# compose stack status
+dev-ps:
+    docker compose -f deploy/compose/docker-compose.yml --env-file .env ps
+
+# run the dev signer natively (premines, then a block every interval; reads .env)
+dev-signer *ARGS:
+    cargo run -p signet-signer -- {{ARGS}}
+
+# mint a bearer API token from the dev NIP-98 key (prints the raw token)
+get-token:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${SIGNET_DEV_NSEC:-}" ]; then
+        echo 'SIGNET_DEV_NSEC missing in .env — add a stable dev key once:'
+        echo '  echo "SIGNET_DEV_NSEC=$(openssl rand -hex 32)" >> .env'
+        exit 1
+    fi
+    cargo run -q -p signet-cli -- token --nsec "$SIGNET_DEV_NSEC"
+
 test:
     cargo test --workspace
 
