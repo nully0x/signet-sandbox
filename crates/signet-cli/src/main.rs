@@ -10,9 +10,11 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use clap::{Args, Parser, Subcommand};
+use nostr::key::Keys;
 use serde_json::json;
 use signet_core::{ConnectionBundle, EnvStatus};
 
+use crate::auth::Auth;
 use crate::rpc::{CallError, Client};
 
 #[derive(Debug)]
@@ -37,7 +39,13 @@ impl From<CallError> for CliError {
     fn from(err: CallError) -> Self {
         match err {
             CallError::Rpc(e) => CliError::Rpc(e),
-            other => CliError::Other(anyhow::anyhow!("{other}")),
+            CallError::Transport(e) if e.is_connect() => {
+                let url = e.url().map(reqwest::Url::as_str).unwrap_or("the API");
+                CliError::Other(anyhow::anyhow!(
+                    "cannot reach the API at {url} — is it running? start it with: just dev-api"
+                ))
+            }
+            other => CliError::Other(anyhow::Error::new(other)),
         }
     }
 }
@@ -101,6 +109,11 @@ enum Command {
         #[command(flatten)]
         common: Common,
     },
+    /// Mint a bearer API token (NIP-98-only; prints the raw token)
+    Token {
+        #[command(flatten)]
+        common: Common,
+    },
 }
 
 #[derive(Args)]
@@ -142,6 +155,7 @@ fn run(command: Command) -> u8 {
             common,
         } => fund(&env_id, &address, amount, &common),
         Command::Down { env_id, common } => down(&env_id, &common),
+        Command::Token { common } => token(&common),
     };
     match result {
         Ok(()) => 0,
@@ -263,6 +277,32 @@ fn down(env_id: &str, common: &Common) -> Result<(), CliError> {
     Ok(())
 }
 
+fn token(common: &Common) -> Result<(), CliError> {
+    if common.token.is_some() {
+        return Err(CliError::Other(anyhow::anyhow!(
+            "token.create authenticates with NIP-98 only; unset --token / SIGNET_TOKEN"
+        )));
+    }
+    let key = common
+        .nsec
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("no NIP-98 key: pass --nsec or set SIGNET_NSEC"))?;
+    let keys = Keys::parse(&key).map_err(|e| anyhow::anyhow!("invalid Nostr secret key: {e}"))?;
+    let client = Client::new(&common.api, Auth::Nip98(keys))?;
+    let result = client.call("token.create", json!({}))?;
+    let raw = result
+        .get("token")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("token.create returned no token"))?
+        .to_string();
+    if common.json {
+        output::print_json(&result)?;
+    } else {
+        println!("{raw}");
+    }
+    Ok(())
+}
+
 fn poll_get(client: &Client, env_id: &str) -> anyhow::Result<ConnectionBundle> {
     serde_json::from_value(client.call("environment.get", json!({ "id": env_id }))?)
         .map_err(unexpected_payload)
@@ -338,5 +378,55 @@ mod tests {
             json: false,
         };
         assert!(up(None, Some("cli-test".into()), None, 10, 0, &common).is_err());
+    }
+
+    #[test]
+    fn token_mints_with_nip98_and_prints_the_raw_token() {
+        let base = serve_sequence(vec![rpc_result(r#"{"token":"sgn_00ab"}"#)]);
+        let common = Common {
+            api: base,
+            token: None,
+            nsec: Some("0000000000000000000000000000000000000000000000000000000000000001".into()),
+            json: false,
+        };
+        assert!(token(&common).is_ok(), "token failed");
+    }
+
+    #[test]
+    fn token_rejects_bearer_credentials() {
+        let base = serve_sequence(vec![]);
+        let common = Common {
+            api: base,
+            token: Some("sgn_t".into()),
+            nsec: None,
+            json: false,
+        };
+        assert!(token(&common).is_err());
+    }
+
+    #[test]
+    fn token_requires_a_nip98_key() {
+        let base = serve_sequence(vec![]);
+        let common = Common {
+            api: base,
+            token: None,
+            nsec: None,
+            json: false,
+        };
+        assert!(token(&common).is_err());
+    }
+
+    #[test]
+    fn connect_failures_hint_at_the_api_process() {
+        let client = Client::new("http://127.0.0.1:1", Auth::Bearer("sgn_t".into())).unwrap();
+        let err = CliError::from(client.call("environment.get", json!({})).unwrap_err());
+        match err {
+            CliError::Other(msg) => {
+                let shown = format!("{msg:#}");
+                assert!(shown.contains("cannot reach the API"), "got: {shown}");
+                assert!(shown.contains("just dev-api"), "got: {shown}");
+            }
+            other => panic!("expected Other, got {other:?}"),
+        }
     }
 }
