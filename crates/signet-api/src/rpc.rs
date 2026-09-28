@@ -413,7 +413,7 @@ async fn environment_get(state: &AppState, id: Id, caller: Caller, params: Value
         Err(e) => return Response::error(Some(id), Error::new(INVALID_PARAMS, e.to_string())),
     };
 
-    let row = match resolve_environment(state, &caller, &params.id).await {
+    let mut row = match resolve_environment(state, &caller, &params.id).await {
         Ok(row) => row,
         Err(e) => return Response::error(Some(id), e),
     };
@@ -424,6 +424,8 @@ async fn environment_get(state: &AppState, id: Id, caller: Caller, params: Value
             Error::new(FORBIDDEN, "caller is not the environment owner"),
         );
     }
+
+    reconcile_reaped(state, &mut row).await;
 
     let status = if row.status == "provisioning"
         && state
@@ -449,6 +451,31 @@ async fn environment_get(state: &AppState, id: Id, caller: Caller, params: Value
         Some(id),
         serde_json::to_value(bundle_for(&row, status, rpc_auth)).expect("bundle serializes"),
     )
+}
+
+/// Converge a row whose namespace the reaper (or anything else) removed:
+/// a live-looking status with no namespace is `expired`. Best effort — a
+/// failed existence check leaves the row untouched.
+async fn reconcile_reaped(state: &AppState, row: &mut EnvironmentRow) {
+    if !matches!(row.status.as_str(), "provisioning" | "ready" | "stopped") {
+        return;
+    }
+    match state
+        .orchestrator
+        .environment_exists(&short_id(row.id))
+        .await
+    {
+        Ok(false) => {
+            tracing::warn!(env_id = %row.id, "environment namespace is gone; marking expired");
+            if let Err(e) = signet_db::set_environment_status(&state.pool, row.id, "expired").await
+            {
+                tracing::error!(error = %e, "expired status update failed");
+            }
+            row.status = "expired".to_string();
+        }
+        Ok(true) => {}
+        Err(e) => tracing::warn!(error = %e, "environment existence check failed"),
+    }
 }
 
 async fn environment_list(state: &AppState, id: Id, caller: Caller) -> Response {
@@ -526,7 +553,7 @@ async fn lifecycle_transition(
         Err(e) => return Response::error(Some(id), Error::new(INVALID_PARAMS, e.to_string())),
     };
 
-    let row = match resolve_environment(state, &caller, &params.id).await {
+    let mut row = match resolve_environment(state, &caller, &params.id).await {
         Ok(row) => row,
         Err(e) => return Response::error(Some(id), e),
     };
@@ -537,6 +564,8 @@ async fn lifecycle_transition(
             Error::new(FORBIDDEN, "caller is not the environment owner"),
         );
     }
+
+    reconcile_reaped(state, &mut row).await;
 
     if row.status != transition.required_status() {
         return Response::error(

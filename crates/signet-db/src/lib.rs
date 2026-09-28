@@ -155,6 +155,20 @@ pub async fn set_environment_status(pool: &PgPool, id: Uuid, status: &str) -> Re
     Ok(())
 }
 
+/// Mark an environment expired by its 12-hex namespace short id; the reaper
+/// knows namespace names, not uuids. Returns how many rows changed.
+pub async fn mark_expired_by_short_id(pool: &PgPool, short_id: &str) -> Result<u64, DbError> {
+    let result = sqlx::query(
+        "update environments set status = 'expired'
+         where left(replace(id::text, '-', ''), 12) = $1 and status <> 'destroyed'",
+    )
+    .bind(short_id)
+    .execute(pool)
+    .await
+    .map_err(DbError::from)?;
+    Ok(result.rows_affected())
+}
+
 // Sequential allocation inside the published electrum port range; the caller
 // rejects allocation past the range top.
 pub async fn next_electrum_port(pool: &PgPool, base: i32) -> Result<i32, DbError> {
