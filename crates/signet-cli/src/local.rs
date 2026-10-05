@@ -11,6 +11,8 @@ pub const CLUSTER: &str = "signet";
 pub const EG_VERSION: &str = "v1.2.4";
 pub const GATEWAY_API_VERSION: &str = "v1.2.1";
 pub const GATEWAY_MANIFEST: &str = include_str!("../templates/gateway-eg.yaml");
+pub const LOCAL_STACK_MANIFEST: &str = include_str!("../templates/local-stack.yaml");
+pub const PLATFORM_NAMESPACE: &str = "signet-platform";
 
 /// Default publish target of the `publish-images` workflow. Override for
 /// forks with SIGNET_IMAGE_REGISTRY.
@@ -58,7 +60,9 @@ pub fn init() -> anyhow::Result<()> {
     ensure_cluster(&bin)?;
     pull_images(bin.as_path())?;
     install_gateway(bin.as_path())?;
-    println!("cluster ready: k3d cluster `{CLUSTER}` with the envoy gateway stack");
+    deploy_local_stack(bin.as_path())?;
+    wait_api()?;
+    println!("local stack ready: provisioning api on http://localhost:8081");
     Ok(())
 }
 
@@ -292,6 +296,48 @@ fn import_images(bin: &Path, names: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Apply the postgres + api stack and wait for both rollouts. The registry
+/// placeholder is substituted so forks can point SIGNET_IMAGE_REGISTRY at
+/// their own ghcr namespace.
+fn deploy_local_stack(bin: &Path) -> anyhow::Result<()> {
+    println!("deploying postgres + provisioning api");
+    let manifest = LOCAL_STACK_MANIFEST.replace("REGISTRY_PLACEHOLDER", &registry());
+    write_stdin_manifest(bin, &manifest)?;
+    run(kubectl(bin).args([
+        "-n",
+        PLATFORM_NAMESPACE,
+        "rollout",
+        "status",
+        "deploy/postgres",
+        "--timeout=180s",
+    ]))?;
+    run(kubectl(bin).args([
+        "-n",
+        PLATFORM_NAMESPACE,
+        "rollout",
+        "status",
+        "deploy/signet-api",
+        "--timeout=180s",
+    ]))?;
+    Ok(())
+}
+
+/// The k3d serverlb maps host 8081 to the api's LoadBalancer service; poll
+/// until the routing chain answers.
+fn wait_api() -> anyhow::Result<()> {
+    println!("waiting for the api on http://localhost:8081…");
+    for _ in 0..30 {
+        if reqwest::blocking::get("http://localhost:8081/healthz")
+            .map(|r| r.status().is_success())
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    anyhow::bail!("api did not become healthy on localhost:8081 within 60s")
+}
+
 fn install_gateway(bin: &Path) -> anyhow::Result<()> {
     println!("installing the envoy gateway stack");
     run(kubectl(bin).args([
@@ -414,5 +460,34 @@ mod tests {
             full_image("example.com/mine", "mempool/backend:v3.3.1"),
             "mempool/backend:v3.3.1"
         );
+    }
+
+    #[test]
+    fn local_stack_manifest_is_complete_multi_doc_yaml() {
+        // Never split or hand-consume multi-doc yaml (see repo gotcha 13);
+        // kubectl applies the file as one stream, so parse it the same way.
+        use serde::Deserialize as _;
+        let docs: Vec<serde_yaml::Value> = serde_yaml::Deserializer::from_str(LOCAL_STACK_MANIFEST)
+            .map(|doc| serde_yaml::Value::deserialize(doc).unwrap())
+            .collect();
+        let kinds: Vec<String> = docs
+            .iter()
+            .map(|d| d["kind"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "Service",
+                "PersistentVolumeClaim",
+                "Deployment",
+                "ServiceAccount",
+                "ClusterRole",
+                "ClusterRoleBinding",
+                "Service",
+                "Deployment"
+            ]
+        );
+        assert!(LOCAL_STACK_MANIFEST.contains("REGISTRY_PLACEHOLDER/signet-api"));
+        assert!(LOCAL_STACK_MANIFEST.contains("localhost:8081"));
     }
 }

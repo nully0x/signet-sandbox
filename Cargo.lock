@@ -2537,6 +2537,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "serde_yaml",
  "signet-core",
  "signet-nostr",
  "signet-rpc",
