@@ -3,6 +3,7 @@
 mod auth;
 mod config;
 mod duration;
+mod local;
 mod output;
 mod rpc;
 
@@ -142,6 +143,17 @@ enum Command {
     },
     /// Print the JSON Schema for the environment config (spec §5)
     Schema {},
+    /// Local mode cluster management (spec §10.2)
+    Local {
+        #[command(subcommand)]
+        action: LocalAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum LocalAction {
+    /// Create or start the local cluster and its gateway stack
+    Init,
 }
 
 #[derive(Args)]
@@ -188,6 +200,9 @@ fn run(command: Command) -> u8 {
         Command::Down { env, common } => down(&env, &common),
         Command::Token { nsec, api, json } => token(nsec, &api, json),
         Command::Schema {} => schema(),
+        Command::Local {
+            action: LocalAction::Init,
+        } => local::init().map_err(CliError::from),
     };
     match result {
         Ok(()) => 0,
