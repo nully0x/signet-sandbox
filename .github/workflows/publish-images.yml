@@ -1,0 +1,69 @@
+# Publishes the platform-owned images to ghcr.io. The local bootstrap
+# (CP-9.6) pulls these instead of building from source (spec §10.2).
+name: publish-images
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: signet-api
+            dockerfile: deploy/docker/Dockerfile.signet-api
+          - image: signet-signer
+            dockerfile: deploy/docker/Dockerfile.signer
+          - image: signet-faucet
+            dockerfile: deploy/docker/Dockerfile.signet-faucet
+          # electrs is identified by its own version, not the repo tag:
+          # the versions map (spec §5) pins `electrs: <upstream release>`.
+          # Bump both the arg and the version together.
+          - image: electrs
+            dockerfile: deploy/docker/Dockerfile.electrs
+            build_args: "ELECTRS_VERSION=v0.11.1"
+            version: "0.11.1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image tag
+        id: meta
+        env:
+          FIXED_VERSION: ${{ matrix.version }}
+        run: |
+          if [ -n "$FIXED_VERSION" ]; then
+            echo "version=$FIXED_VERSION" >> "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.image }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          build-args: ${{ matrix.build_args }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.meta.outputs.version }}
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}:latest
