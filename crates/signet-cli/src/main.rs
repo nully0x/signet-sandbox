@@ -5,6 +5,7 @@ mod config;
 mod duration;
 mod local;
 mod output;
+mod profile;
 mod rpc;
 
 use std::path::PathBuf;
@@ -154,6 +155,10 @@ enum Command {
 enum LocalAction {
     /// Create or start the local cluster and its gateway stack
     Init,
+    /// Report cluster, api, and profile state
+    Status,
+    /// Delete the local cluster (the profile is kept)
+    Down,
 }
 
 #[derive(Args)]
@@ -203,6 +208,12 @@ fn run(command: Command) -> u8 {
         Command::Local {
             action: LocalAction::Init,
         } => local::init().map_err(CliError::from),
+        Command::Local {
+            action: LocalAction::Status,
+        } => local::status().map_err(CliError::from),
+        Command::Local {
+            action: LocalAction::Down,
+        } => local::down().map_err(CliError::from),
     };
     match result {
         Ok(()) => 0,
@@ -218,8 +229,37 @@ fn run(command: Command) -> u8 {
 }
 
 fn client(common: &Common) -> anyhow::Result<Client> {
-    let auth = auth::from_flags(common.token.clone(), common.nsec.clone())?;
+    let auth = match auth::from_flags(common.token.clone(), common.nsec.clone()) {
+        Ok(auth) => auth,
+        // No explicit credentials: fall back to the local profile token.
+        Err(_) if local::profile_credentials_apply(common) => {
+            let profile = crate::profile::load()?;
+            auth::Auth::Bearer(profile.token)
+        }
+        Err(e) => return Err(e),
+    };
     Client::new(&common.api, auth)
+}
+
+/// `up` is the auto-bootstrap entry point (CP-9.7): when the default local
+/// api is not running, bring the whole local stack up first. A custom
+/// `--api` that is down stays a hard error.
+fn ensure_local_api(common: &Common) -> Result<(), CliError> {
+    let reachable = local::api_healthy(&common.api);
+    if local::should_bootstrap(&common.api, reachable) {
+        println!(
+            "no local api on {} — bootstrapping the local cluster",
+            local::DEFAULT_LOCAL_API
+        );
+        return local::init().map_err(CliError::from);
+    }
+    if !reachable {
+        return Err(CliError::Other(anyhow::anyhow!(
+            "cannot reach the API at {} — is it running? start it with: just dev-api",
+            common.api
+        )));
+    }
+    Ok(())
 }
 
 fn up(
@@ -230,6 +270,7 @@ fn up(
     poll_secs: u64,
     common: &Common,
 ) -> Result<(), CliError> {
+    ensure_local_api(common)?;
     let client = client(common)?;
     let cfg = match &config_path {
         Some(path) => Some(config::load_config(path)?),
@@ -360,19 +401,23 @@ fn down(env: &str, common: &Common) -> Result<(), CliError> {
     Ok(())
 }
 
+pub(crate) fn mint_token(api: &str, key: &str) -> anyhow::Result<String> {
+    let keys = Keys::parse(key).map_err(|e| anyhow::anyhow!("invalid Nostr secret key: {e}"))?;
+    let client = Client::new(api, Auth::Nip98(keys))?;
+    let result = client.call("token.create", json!({}))?;
+    result
+        .get("token")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("token.create returned no token"))
+}
+
 fn token(nsec: Option<String>, api: &str, json: bool) -> Result<(), CliError> {
     let key =
         nsec.ok_or_else(|| anyhow::anyhow!("no NIP-98 key: pass --nsec or set SIGNET_NSEC"))?;
-    let keys = Keys::parse(&key).map_err(|e| anyhow::anyhow!("invalid Nostr secret key: {e}"))?;
-    let client = Client::new(api, Auth::Nip98(keys))?;
-    let result = client.call("token.create", json!({}))?;
-    let raw = result
-        .get("token")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("token.create returned no token"))?
-        .to_string();
+    let raw = mint_token(api, &key)?;
     if json {
-        output::print_json(&result)?;
+        output::print_json(&json!({ "token": raw }))?;
     } else {
         println!("{raw}");
     }

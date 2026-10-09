@@ -6,11 +6,15 @@ use std::process::Command;
 use std::time::Duration;
 
 use anyhow::Context as _;
+use nostr::nips::nip19::ToBech32 as _;
 
 pub const CLUSTER: &str = "signet";
+pub const DEFAULT_LOCAL_API: &str = "http://localhost:8081";
 pub const EG_VERSION: &str = "v1.2.4";
 pub const GATEWAY_API_VERSION: &str = "v1.2.1";
 pub const GATEWAY_MANIFEST: &str = include_str!("../templates/gateway-eg.yaml");
+pub const LOCAL_STACK_MANIFEST: &str = include_str!("../templates/local-stack.yaml");
+pub const PLATFORM_NAMESPACE: &str = "signet-platform";
 
 /// Default publish target of the `publish-images` workflow. Override for
 /// forks with SIGNET_IMAGE_REGISTRY.
@@ -20,6 +24,19 @@ fn registry() -> String {
 
 fn image(name: &str) -> String {
     full_image(&registry(), name)
+}
+
+/// Auto-bootstrap applies only when the caller targets the default local
+/// api and it is not reachable; a custom `--api` that is down is an error.
+pub fn should_bootstrap(api: &str, reachable: bool) -> bool {
+    api == DEFAULT_LOCAL_API && !reachable
+}
+
+/// The profile token applies only when no explicit credential was given
+/// (flag or env); an empty value counts as unset.
+pub fn profile_credentials_apply(common: &crate::Common) -> bool {
+    common.token.as_deref().is_none_or(str::is_empty)
+        && common.nsec.as_deref().is_none_or(str::is_empty)
 }
 
 /// Every image an environment manifest can reference: (name to pull, local
@@ -58,7 +75,68 @@ pub fn init() -> anyhow::Result<()> {
     ensure_cluster(&bin)?;
     pull_images(bin.as_path())?;
     install_gateway(bin.as_path())?;
-    println!("cluster ready: k3d cluster `{CLUSTER}` with the envoy gateway stack");
+    deploy_local_stack(bin.as_path())?;
+    wait_api()?;
+    let profile = crate::profile::ensure_with(
+        &crate::profile::path()?,
+        "http://localhost:8081",
+        crate::mint_token,
+    )?;
+    let npub = nostr::key::Keys::parse(&profile.nsec)
+        .map(|keys| keys.public_key().to_bech32().unwrap_or_default())
+        .unwrap_or_default();
+    println!(
+        "profile written: {} (identity {npub})",
+        crate::profile::path()?.display()
+    );
+    println!("local stack ready: provisioning api on http://localhost:8081");
+    Ok(())
+}
+
+/// Report cluster, api, and profile state without changing anything.
+pub fn status() -> anyhow::Result<()> {
+    let bin = bin_dir()?;
+    let cluster = k3d(&bin)
+        .args(["cluster", "get", CLUSTER])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    println!(
+        "cluster: {}",
+        if cluster {
+            "running"
+        } else {
+            "not bootstrapped"
+        }
+    );
+    let api = api_healthy(DEFAULT_LOCAL_API);
+    println!(
+        "api: {}",
+        if api {
+            "healthy on http://localhost:8081"
+        } else {
+            "unreachable"
+        }
+    );
+    match crate::profile::load() {
+        Ok(profile) => {
+            let npub = nostr::key::Keys::parse(&profile.nsec)
+                .ok()
+                .and_then(|keys| keys.public_key().to_bech32().ok())
+                .unwrap_or_else(|| "<unparsable>".to_string());
+            println!("profile: identity {npub}");
+        }
+        Err(_) => println!("profile: none — run signet local init"),
+    }
+    Ok(())
+}
+
+/// Tear the local cluster down. The profile survives: the identity is
+/// reused and the token re-minted by the next `signet local init`.
+pub fn down() -> anyhow::Result<()> {
+    let bin = bin_dir()?;
+    run(k3d(&bin).args(["cluster", "delete", CLUSTER]))?;
+    println!("cluster `{CLUSTER}` deleted (profile kept at ~/.signet/config.toml)");
     Ok(())
 }
 
@@ -292,6 +370,65 @@ fn import_images(bin: &Path, names: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Apply the postgres + api stack and wait for both rollouts. The registry
+/// placeholder is substituted so forks can point SIGNET_IMAGE_REGISTRY at
+/// their own ghcr namespace.
+fn deploy_local_stack(bin: &Path) -> anyhow::Result<()> {
+    println!("deploying postgres + provisioning api");
+    let manifest = LOCAL_STACK_MANIFEST.replace("REGISTRY_PLACEHOLDER", &registry());
+    write_stdin_manifest(bin, &manifest)?;
+    run(kubectl(bin).args([
+        "-n",
+        PLATFORM_NAMESPACE,
+        "rollout",
+        "status",
+        "deploy/postgres",
+        "--timeout=180s",
+    ]))?;
+    run(kubectl(bin).args([
+        "-n",
+        PLATFORM_NAMESPACE,
+        "rollout",
+        "status",
+        "deploy/signet-api",
+        "--timeout=180s",
+    ]))?;
+    Ok(())
+}
+
+/// The k3d serverlb maps host 8081 to the api's LoadBalancer service; poll
+/// until the routing chain answers.
+fn wait_api() -> anyhow::Result<()> {
+    println!("waiting for the api on http://localhost:8081…");
+    for _ in 0..30 {
+        if reqwest::blocking::get("http://localhost:8081/healthz")
+            .map(|r| r.status().is_success())
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    anyhow::bail!("api did not become healthy on localhost:8081 within 60s")
+}
+
+/// Probe the api health endpoint with a short timeout; used by `local
+/// status`, `wait_api`, and the auto-bootstrap decision.
+pub(crate) fn api_healthy(url: &str) -> bool {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .ok()
+        .and_then(|client| {
+            client
+                .get(format!("{url}/healthz"))
+                .send()
+                .ok()
+                .map(|r| r.status().is_success())
+        })
+        .unwrap_or(false)
+}
+
 fn install_gateway(bin: &Path) -> anyhow::Result<()> {
     println!("installing the envoy gateway stack");
     run(kubectl(bin).args([
@@ -414,5 +551,34 @@ mod tests {
             full_image("example.com/mine", "mempool/backend:v3.3.1"),
             "mempool/backend:v3.3.1"
         );
+    }
+
+    #[test]
+    fn local_stack_manifest_is_complete_multi_doc_yaml() {
+        // Never split or hand-consume multi-doc yaml (see repo gotcha 13);
+        // kubectl applies the file as one stream, so parse it the same way.
+        use serde::Deserialize as _;
+        let docs: Vec<serde_yaml::Value> = serde_yaml::Deserializer::from_str(LOCAL_STACK_MANIFEST)
+            .map(|doc| serde_yaml::Value::deserialize(doc).unwrap())
+            .collect();
+        let kinds: Vec<String> = docs
+            .iter()
+            .map(|d| d["kind"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "Service",
+                "PersistentVolumeClaim",
+                "Deployment",
+                "ServiceAccount",
+                "ClusterRole",
+                "ClusterRoleBinding",
+                "Service",
+                "Deployment"
+            ]
+        );
+        assert!(LOCAL_STACK_MANIFEST.contains("REGISTRY_PLACEHOLDER/signet-api"));
+        assert!(LOCAL_STACK_MANIFEST.contains("localhost:8081"));
     }
 }
