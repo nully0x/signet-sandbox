@@ -1,0 +1,111 @@
+# Per-instance LND (spec §5, §11): LND_NAME is substituted per instance
+# before apply. Connects to the environment's one bitcoind over RPC + ZMQ.
+# First boot creates the wallet (--noseedbackup: env wallets are disposable);
+# later boots unlock it. The admin macaroon is read by the api via exec.
+apiVersion: v1
+kind: Service
+metadata:
+  name: lnd-LND_NAME
+spec:
+  selector:
+    app: lnd-LND_NAME
+  ports:
+    - name: rest
+      port: 8080
+      targetPort: 8080
+    - name: grpc
+      port: 10009
+      targetPort: 10009
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lnd-LND_NAME
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lnd-LND_NAME
+  template:
+    metadata:
+      labels:
+        app: lnd-LND_NAME
+    spec:
+      containers:
+        - name: lnd
+          image: lightninglabs/lnd:0.19.2-beta
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              # Polar-style automation, adapted to k8s: start lnd in the
+              # background, wait for its RPC *port* (a locked or missing
+              # wallet answers lncli with errors, so the port is the only
+              # reliable readiness signal), then branch on wallet.db.
+              set -e
+              lnd \
+                --noseedbackup \
+                --signet \
+                --bitcoin.active \
+                --bitcoin.node=bitcoindrpc \
+                --bitcoind.rpchost=bitcoind:38332 \
+                --bitcoind.rpcuser=$BITCOIN_RPC_USER \
+                --bitcoind.rpcpass=$BITCOIN_RPC_PASSWORD \
+                --bitcoind.zmqpubrawblock=tcp://bitcoind:28332 \
+                --bitcoind.zmqpubrawtx=tcp://bitcoind:28333 \
+                --rpclisten=0.0.0.0:10009 \
+                --restlisten=0.0.0.0:8080 \
+                --tlsextradomain=lnd-LND_NAME &
+              LND_PID=$!
+              trap 'kill $LND_PID' TERM INT
+              until nc -z 127.0.0.1 10009 2>/dev/null; do sleep 1; done
+
+              WALLET_DB=/root/.lnd/data/chain/bitcoin/signet/wallet.db
+              if [ -f "$WALLET_DB" ]; then
+                printf '%s\n' "$LND_WALLET_PASSWORD" \
+                  | lncli --network=signet unlock 2>/dev/null || true
+              else
+                printf '%s\n%s\n' "$LND_WALLET_PASSWORD" "$LND_WALLET_PASSWORD" \
+                  | lncli --network=signet create --noseedbackup 2>/dev/null
+              fi
+
+              wait $LND_PID
+          env:
+            - name: BITCOIN_RPC_USER
+              valueFrom:
+                secretKeyRef:
+                  name: signet-secrets
+                  key: BITCOIN_RPC_USER
+            - name: BITCOIN_RPC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: signet-secrets
+                  key: BITCOIN_RPC_PASSWORD
+            - name: LND_WALLET_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: signet-secrets
+                  key: LND_WALLET_PASSWORD
+          ports:
+            - name: rest
+              containerPort: 8080
+            - name: grpc
+              containerPort: 10009
+            - name: p2p
+              containerPort: 9735
+          volumeMounts:
+            - name: data
+              mountPath: /root/.lnd
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: lnd-LND_NAME
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lnd-LND_NAME
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi

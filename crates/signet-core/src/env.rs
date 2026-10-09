@@ -24,6 +24,38 @@ pub struct Components {
     pub indexer: bool,
     #[serde(default)]
     pub faucet: bool,
+    /// Named Lightning instances (spec §5): a list, never a single object.
+    #[serde(default)]
+    pub lightning: Vec<LightningInstance>,
+}
+
+/// Lightning implementations in the type space (spec §5). Only `lnd` is
+/// buildable in v1 — provisioning rejects the rest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LightningImplementation {
+    Lnd,
+    Cln,
+    Eclair,
+    LdkNode,
+}
+
+impl LightningImplementation {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LightningImplementation::Lnd => "lnd",
+            LightningImplementation::Cln => "cln",
+            LightningImplementation::Eclair => "eclair",
+            LightningImplementation::LdkNode => "ldk_node",
+        }
+    }
+}
+
+/// One named Lightning instance (spec §5): a list, never a single object.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+pub struct LightningInstance {
+    pub name: String,
+    pub implementation: LightningImplementation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]

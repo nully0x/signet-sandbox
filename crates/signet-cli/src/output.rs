@@ -79,8 +79,13 @@ pub fn print_bundle_human(bundle: &ConnectionBundle) {
     if let Some(url) = &bundle.faucet_url {
         println!("faucet_url:       {url}");
     }
-    if let Some(lightning) = &bundle.lightning {
-        println!("lightning_rest:   {}", lightning.rest_url);
+    if !bundle.lightning.is_empty() {
+        for (name, connection) in &bundle.lightning {
+            println!(
+                "lightning {name}:      {} ({})",
+                connection.rest_url, connection.implementation
+            );
+        }
     }
     println!("signet_challenge: {}", bundle.signet_challenge);
     println!("block_policy:     {}", policy_label(bundle.block_policy));

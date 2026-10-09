@@ -7,7 +7,7 @@ use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::Value;
-use signet_core::bundle::ConnectionBundle;
+use signet_core::bundle::{ConnectionBundle, LightningConnection};
 use signet_core::env::{BlockPolicy, CreateParams, EnvStatus};
 use signet_db::{EnvironmentRow, PgPool};
 use signet_nostr::{ApiToken, verify_nip98_header};
@@ -17,6 +17,7 @@ use signet_rpc::error::{
     CHAIN_ERROR, ENV_NOT_FOUND, Error, FAUCET_FAILED, FORBIDDEN, INTERNAL_ERROR, INVALID_ADDRESS,
     INVALID_PARAMS, INVALID_REQUEST, NOT_AVAILABLE_IN_PHASE, PARSE_ERROR, UNAUTHENTICATED,
 };
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
@@ -234,6 +235,43 @@ async fn resolve_environment(
     }
 }
 
+/// Lightning validation (spec §5): names unique per env; only lnd is
+/// buildable in v1 — the rest of the enum exists in the type space only.
+fn validate_lightning(instances: &[signet_core::env::LightningInstance]) -> Result<(), String> {
+    let mut seen = std::collections::BTreeSet::new();
+    for instance in instances {
+        // Names become k8s resource names: dns-1123 label, max 63 chars.
+        let name = instance.name.as_str();
+        let dns_safe = !name.is_empty()
+            && name.len() <= 63
+            && name
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+            && name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        if !dns_safe {
+            return Err(format!(
+                "lightning instance name `{name}` must be a dns label (lowercase alphanumerics and '-', max 63)"
+            ));
+        }
+        if !seen.insert(name) {
+            return Err(format!("duplicate lightning instance name `{name}`"));
+        }
+        if !matches!(
+            instance.implementation,
+            signet_core::env::LightningImplementation::Lnd
+        ) {
+            return Err(format!(
+                "lightning implementation `{}` is not available (only lnd is supported)",
+                instance.implementation.as_str()
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn resolve_expires_at(
     ttl_secs: Option<i64>,
     now: DateTime<Utc>,
@@ -283,10 +321,18 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
         );
     }
 
+    if let Err(message) = validate_lightning(&params.components.lightning) {
+        return Response::error(Some(id), Error::new(INVALID_PARAMS, message));
+    }
+
+    // Lightning needs the indexer (spec §5): force it on rather than reject.
+    let indexer = params.components.indexer || !params.components.lightning.is_empty();
+
     let env_id = Uuid::now_v7();
     let key = signet_signer::generate_key();
     let rpc_user = "signet".to_string();
     let rpc_password = Uuid::new_v4().simple().to_string();
+    let lnd_wallet_password = Uuid::new_v4().simple().to_string();
 
     let secrets = EnvSecrets {
         signer_wif: key.wif,
@@ -294,6 +340,7 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
         signet_challenge: key.challenge.clone(),
         rpc_user: rpc_user.clone(),
         rpc_password: rpc_password.clone(),
+        lnd_wallet_password: lnd_wallet_password.clone(),
     };
 
     let rpc_endpoint = format!("{}/env/{env_id}/rpc", state.public_url);
@@ -301,7 +348,7 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
         .components
         .explorer
         .then(|| state.orchestrator.explorer_url(&short_id(env_id)));
-    let electrs_requested = params.components.indexer || params.components.explorer;
+    let electrs_requested = indexer || params.components.explorer;
     let electrum_port = if electrs_requested {
         match signet_db::next_electrum_port(&state.pool, signet_orchestrator::ELECTRUM_PORT_BASE)
             .await
@@ -341,7 +388,7 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
         block_policy: policy_as_str(params.block_policy.unwrap_or(BlockPolicy::Interval30s)),
         signet_challenge: &key.challenge,
         component_explorer: params.components.explorer,
-        component_indexer: params.components.indexer,
+        component_indexer: indexer,
         component_faucet: params.components.faucet,
         rpc_endpoint: &rpc_endpoint,
         explorer_endpoint: explorer_endpoint.as_deref(),
@@ -379,9 +426,10 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
             &secrets,
             &images,
             EnvComponents {
-                indexer: params.components.indexer,
+                indexer,
                 faucet: params.components.faucet,
                 explorer: params.components.explorer,
+                lightning: params.components.lightning.clone(),
             },
             electrum_port.map(|p| p as u16),
             expires_at,
@@ -396,12 +444,19 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
         );
     }
 
+    if let Err(e) =
+        signet_db::set_lightning_instances(&state.pool, env_id, &params.components.lightning).await
+    {
+        tracing::error!(error = %e, "lightning instance persist failed");
+    }
+
     Response::result(
         Some(id),
         serde_json::to_value(bundle_for(
             &row,
             EnvStatus::Provisioning,
             Some(format!("{rpc_user}:{rpc_password}")),
+            BTreeMap::new(),
         ))
         .expect("bundle serializes"),
     )
@@ -447,9 +502,47 @@ async fn environment_get(state: &AppState, id: Id, caller: Caller, params: Value
         .ok()
         .map(|(u, p)| format!("{u}:{p}"));
 
+    let mut lightning = BTreeMap::new();
+    if status == EnvStatus::Ready {
+        let instances = match signet_db::get_lightning_instances(&state.pool, row.id).await {
+            Ok(instances) => instances,
+            Err(e) => {
+                tracing::warn!(error = %e, "lightning instance lookup failed");
+                Vec::new()
+            }
+        };
+        for instance in instances {
+            match state
+                .orchestrator
+                .lightning_admin_macaroon(&short_id(row.id), &instance.name)
+                .await
+            {
+                Ok(macaroon) => {
+                    lightning.insert(
+                        instance.name.clone(),
+                        LightningConnection {
+                            implementation: instance.implementation.clone(),
+                            rest_url: state
+                                .orchestrator
+                                .lightning_rest_url(&short_id(row.id), &instance.name),
+                            auth: signet_core::bundle::BundleAuth {
+                                kind: "macaroon".to_string(),
+                                value: macaroon,
+                            },
+                        },
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, env = %row.id, instance = %instance.name, "admin macaroon unavailable; omitting instance");
+                }
+            }
+        }
+    }
+
     Response::result(
         Some(id),
-        serde_json::to_value(bundle_for(&row, status, rpc_auth)).expect("bundle serializes"),
+        serde_json::to_value(bundle_for(&row, status, rpc_auth, lightning))
+            .expect("bundle serializes"),
     )
 }
 
@@ -727,6 +820,7 @@ fn bundle_for(
     row: &EnvironmentRow,
     status: EnvStatus,
     rpc_auth: Option<String>,
+    lightning: BTreeMap<String, LightningConnection>,
 ) -> ConnectionBundle {
     ConnectionBundle {
         environment_id: row.id.to_string(),
@@ -737,7 +831,7 @@ fn bundle_for(
         indexer_endpoint: row.indexer_endpoint.clone(),
         explorer_url: row.explorer_endpoint.clone(),
         faucet_url: row.faucet_endpoint.clone(),
-        lightning: None,
+        lightning,
         signet_challenge: row.signet_challenge.clone(),
         block_policy: match row.block_policy.as_str() {
             "on_demand" => BlockPolicy::OnDemand,
@@ -871,6 +965,66 @@ mod tests {
         ));
     }
 
+    fn instance(
+        name: &str,
+        implementation: signet_core::env::LightningImplementation,
+    ) -> signet_core::env::LightningInstance {
+        signet_core::env::LightningInstance {
+            name: name.into(),
+            implementation,
+        }
+    }
+
+    #[test]
+    fn validate_lightning_accepts_unique_lnd_instances() {
+        assert!(
+            validate_lightning(&[
+                instance("ln-alice", signet_core::env::LightningImplementation::Lnd),
+                instance("ln-bob", signet_core::env::LightningImplementation::Lnd),
+            ])
+            .is_ok()
+        );
+        assert!(validate_lightning(&[]).is_ok());
+    }
+
+    #[test]
+    fn validate_lightning_rejects_duplicates_and_unsupported_implementations() {
+        assert!(
+            validate_lightning(&[
+                instance("ln-alice", signet_core::env::LightningImplementation::Lnd),
+                instance("ln-alice", signet_core::env::LightningImplementation::Lnd),
+            ])
+            .is_err()
+        );
+        assert!(
+            validate_lightning(&[instance(
+                "ln-cln",
+                signet_core::env::LightningImplementation::Cln
+            )])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn validate_lightning_rejects_names_that_break_k8s_resources() {
+        for bad in [
+            "",
+            "Upper",
+            "has_underscore",
+            "-start",
+            "a".repeat(64).as_str(),
+        ] {
+            assert!(
+                validate_lightning(&[instance(
+                    bad,
+                    signet_core::env::LightningImplementation::Lnd
+                )])
+                .is_err(),
+                "{bad} must be rejected"
+            );
+        }
+    }
+
     #[test]
     fn create_params_default_components_and_policy() {
         let params: CreateParams =
@@ -939,7 +1093,6 @@ mod tests {
             component_explorer: false,
             component_indexer: false,
             component_faucet: false,
-            component_lightning: None,
             rpc_endpoint: "http://x/rpc".into(),
             indexer_endpoint: None,
             explorer_endpoint: None,
@@ -951,7 +1104,13 @@ mod tests {
             current_snapshot_id: None,
             versions: None,
         };
-        let json = serde_json::to_value(bundle_for(&row, EnvStatus::Provisioning, None)).unwrap();
+        let json = serde_json::to_value(bundle_for(
+            &row,
+            EnvStatus::Provisioning,
+            None,
+            BTreeMap::new(),
+        ))
+        .unwrap();
         for absent in [
             "indexer_url",
             "explorer_url",
@@ -976,7 +1135,6 @@ mod tests {
             component_explorer: false,
             component_indexer: false,
             component_faucet: false,
-            component_lightning: None,
             rpc_endpoint: "http://x/rpc".into(),
             indexer_endpoint: None,
             explorer_endpoint: None,
@@ -989,7 +1147,8 @@ mod tests {
             versions: None,
         };
         row.versions = Some(serde_json::json!({ "bitcoind": "bitcoin/bitcoin:28.1" }));
-        let json = serde_json::to_value(bundle_for(&row, EnvStatus::Ready, None)).unwrap();
+        let json = serde_json::to_value(bundle_for(&row, EnvStatus::Ready, None, BTreeMap::new()))
+            .unwrap();
         assert_eq!(
             json["versions"]["bitcoind"],
             serde_json::json!("bitcoin/bitcoin:28.1")

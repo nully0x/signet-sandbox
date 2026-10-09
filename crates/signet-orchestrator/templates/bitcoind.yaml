@@ -9,6 +9,8 @@ data:
     server=1
     fallbackfee=0.00001
     maxconnections=16
+    zmqpubrawblock=tcp://0.0.0.0:28332
+    zmqpubrawtx=tcp://0.0.0.0:28333
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -72,6 +74,10 @@ spec:
               containerPort: 38332
             - name: p2p
               containerPort: 38333
+            - name: zmqblock
+              containerPort: 28332
+            - name: zmqtx
+              containerPort: 28333
           volumeMounts:
             - name: data
               mountPath: /bitcoin
