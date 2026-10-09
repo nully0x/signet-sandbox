@@ -164,6 +164,20 @@ Add `--json` for machine-readable output (the raw result object). The NIP-98
 path signs the exact URL it calls, so `--api` must match the server's
 `public_url` byte for byte.
 
+## Local mode
+
+```bash
+signet local init      # k3d cluster + images + postgres/api in-cluster + profile
+signet local status    # cluster, api health, identity
+signet local down      # delete the cluster (profile kept)
+```
+
+`local init` writes `~/.signet/config.toml` (generated identity + token;
+the identity is stable, the token re-mints on every init). With no
+`SIGNET_TOKEN`/`SIGNET_NSEC`, commands fall back to the profile token,
+and `signet up` bootstraps the whole local stack first when the api on
+`localhost:8081` is not running.
+
 Provision directly against the cluster without the API (useful for
 orchestrator gates):
 

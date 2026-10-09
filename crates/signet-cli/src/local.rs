@@ -6,8 +6,10 @@ use std::process::Command;
 use std::time::Duration;
 
 use anyhow::Context as _;
+use nostr::nips::nip19::ToBech32 as _;
 
 pub const CLUSTER: &str = "signet";
+pub const DEFAULT_LOCAL_API: &str = "http://localhost:8081";
 pub const EG_VERSION: &str = "v1.2.4";
 pub const GATEWAY_API_VERSION: &str = "v1.2.1";
 pub const GATEWAY_MANIFEST: &str = include_str!("../templates/gateway-eg.yaml");
@@ -22,6 +24,19 @@ fn registry() -> String {
 
 fn image(name: &str) -> String {
     full_image(&registry(), name)
+}
+
+/// Auto-bootstrap applies only when the caller targets the default local
+/// api and it is not reachable; a custom `--api` that is down is an error.
+pub fn should_bootstrap(api: &str, reachable: bool) -> bool {
+    api == DEFAULT_LOCAL_API && !reachable
+}
+
+/// The profile token applies only when no explicit credential was given
+/// (flag or env); an empty value counts as unset.
+pub fn profile_credentials_apply(common: &crate::Common) -> bool {
+    common.token.as_deref().is_none_or(str::is_empty)
+        && common.nsec.as_deref().is_none_or(str::is_empty)
 }
 
 /// Every image an environment manifest can reference: (name to pull, local
@@ -62,7 +77,66 @@ pub fn init() -> anyhow::Result<()> {
     install_gateway(bin.as_path())?;
     deploy_local_stack(bin.as_path())?;
     wait_api()?;
+    let profile = crate::profile::ensure_with(
+        &crate::profile::path()?,
+        "http://localhost:8081",
+        crate::mint_token,
+    )?;
+    let npub = nostr::key::Keys::parse(&profile.nsec)
+        .map(|keys| keys.public_key().to_bech32().unwrap_or_default())
+        .unwrap_or_default();
+    println!(
+        "profile written: {} (identity {npub})",
+        crate::profile::path()?.display()
+    );
     println!("local stack ready: provisioning api on http://localhost:8081");
+    Ok(())
+}
+
+/// Report cluster, api, and profile state without changing anything.
+pub fn status() -> anyhow::Result<()> {
+    let bin = bin_dir()?;
+    let cluster = k3d(&bin)
+        .args(["cluster", "get", CLUSTER])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    println!(
+        "cluster: {}",
+        if cluster {
+            "running"
+        } else {
+            "not bootstrapped"
+        }
+    );
+    let api = api_healthy(DEFAULT_LOCAL_API);
+    println!(
+        "api: {}",
+        if api {
+            "healthy on http://localhost:8081"
+        } else {
+            "unreachable"
+        }
+    );
+    match crate::profile::load() {
+        Ok(profile) => {
+            let npub = nostr::key::Keys::parse(&profile.nsec)
+                .ok()
+                .and_then(|keys| keys.public_key().to_bech32().ok())
+                .unwrap_or_else(|| "<unparsable>".to_string());
+            println!("profile: identity {npub}");
+        }
+        Err(_) => println!("profile: none — run signet local init"),
+    }
+    Ok(())
+}
+
+/// Tear the local cluster down. The profile survives: the identity is
+/// reused and the token re-minted by the next `signet local init`.
+pub fn down() -> anyhow::Result<()> {
+    let bin = bin_dir()?;
+    run(k3d(&bin).args(["cluster", "delete", CLUSTER]))?;
+    println!("cluster `{CLUSTER}` deleted (profile kept at ~/.signet/config.toml)");
     Ok(())
 }
 
@@ -336,6 +410,23 @@ fn wait_api() -> anyhow::Result<()> {
         std::thread::sleep(Duration::from_secs(2));
     }
     anyhow::bail!("api did not become healthy on localhost:8081 within 60s")
+}
+
+/// Probe the api health endpoint with a short timeout; used by `local
+/// status`, `wait_api`, and the auto-bootstrap decision.
+pub(crate) fn api_healthy(url: &str) -> bool {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .ok()
+        .and_then(|client| {
+            client
+                .get(format!("{url}/healthz"))
+                .send()
+                .ok()
+                .map(|r| r.status().is_success())
+        })
+        .unwrap_or(false)
 }
 
 fn install_gateway(bin: &Path) -> anyhow::Result<()> {
