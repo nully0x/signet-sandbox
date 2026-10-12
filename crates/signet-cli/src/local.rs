@@ -11,7 +11,6 @@ use nostr::nips::nip19::ToBech32 as _;
 pub const CLUSTER: &str = "signet";
 pub const DEFAULT_LOCAL_API: &str = "http://localhost:8081";
 pub const EG_VERSION: &str = "v1.2.4";
-pub const GATEWAY_API_VERSION: &str = "v1.2.1";
 pub const GATEWAY_MANIFEST: &str = include_str!("../templates/gateway-eg.yaml");
 pub const LOCAL_STACK_MANIFEST: &str = include_str!("../templates/local-stack.yaml");
 pub const PLATFORM_NAMESPACE: &str = "signet-platform";
@@ -454,11 +453,10 @@ fn install_gateway(bin: &Path) -> anyhow::Result<()> {
         "gatewayclass/signet-eg",
         "--timeout=120s",
     ]))?;
-    run(kubectl(bin).args([
-        "apply",
-        "-f",
-        &format!("https://github.com/kubernetes-sigs/gateway-api/releases/download/{GATEWAY_API_VERSION}/standard-install.yaml"),
-    ]))?;
+    // The gateway-api standard install is deliberately NOT applied: the
+    // Envoy Gateway manifest already installs all the CRDs (server-side),
+    // and re-applying them client-side only produced annotation warnings
+    // and a downgrade risk (see repo gotcha 16).
     Ok(())
 }
 

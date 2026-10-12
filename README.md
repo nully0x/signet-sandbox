@@ -39,16 +39,11 @@ practical.
 ## Status
 
 The MVP path is checkpoint-driven: auth, in-cluster provisioning, faucet,
-indexer + explorer behind Envoy Gateway, TTL reaper — see
-[docs/CHECKPOINTS.md](docs/CHECKPOINTS.md) for the live plan and
-[docs/SIGNET_SANDBOX_SPEC.md](docs/SIGNET_SANDBOX_SPEC.md) for the
-specification it implements.
+indexer + explorer behind Envoy Gateway, TTL reaper.
 
 ## Documentation
 
 - [`docs/DEV.md`](docs/DEV.md) — running and operating in dev mode
-- [`docs/CHECKPOINTS.md`](docs/CHECKPOINTS.md) — implementation plan with gates
-- [`docs/SIGNET_SANDBOX_SPEC.md`](docs/SIGNET_SANDBOX_SPEC.md) — technical specification
 - [`AGENTS.md`](AGENTS.md) — operational guide for coding agents
 
 ## Contributing
