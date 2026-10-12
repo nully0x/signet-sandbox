@@ -167,6 +167,10 @@ path signs the exact URL it calls, so `--api` must match the server's
 ## Local mode
 
 ```bash
+just install-cli        # build + install the signet binary into ~/.local/bin
+```
+
+```bash
 signet local init      # k3d cluster + images + postgres/api in-cluster + profile
 signet local status    # cluster, api health, identity
 signet local down      # delete the cluster (profile kept)

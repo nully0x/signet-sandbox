@@ -39,6 +39,14 @@ token minted from the terminal.
   readiness). Stop requires `ready`; start requires `stopped`.
 - **environment.list** returns the caller's environments: id, name,
   status, created/expires timestamps.
+- **environment.create (lightning)** provisions two named LND instances
+  (`ln-alice`, `ln-bob`) plus the indexer they require. The bundle's
+  `lightning` field is a map keyed by instance name — each entry carries
+  `implementation`, `rest_url`, and `auth {type: "macaroon", value}` —
+  and stays absent until the instances are ready. Nodes come up
+  unconnected: open channels yourself via `lncli` inside the pods.
+  Only `lnd` is supported in v1; other implementations are rejected
+  with `-32602`.
 - Failures are JSON-RPC errors inside HTTP 200: check the body's `error`
   (`-32002` unauthenticated, `-32004` not owner, `-32602` invalid
   params, `-32030` wrong lifecycle state).

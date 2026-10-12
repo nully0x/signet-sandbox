@@ -1,6 +1,6 @@
 # Local-mode platform stack: postgres + the provisioning API inside the
-# developer's k3d cluster (spec §10.2). Local-only credentials; the API
-# publishes on localhost:8081 through the k3d serverlb port mapping.
+# developer's k3d cluster. Local-only credentials; the API publishes on
+# localhost:8081 through the k3d serverlb port mapping.
 apiVersion: v1
 kind: Service
 metadata:

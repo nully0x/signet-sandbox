@@ -67,7 +67,7 @@ struct Cli {
 enum Command {
     /// Provision an environment and wait until it is ready
     Up {
-        /// Path to the environment config file (JSON, spec §5)
+        /// Path to the environment config file (JSON)
         #[arg(long)]
         config: Option<PathBuf>,
         /// Environment name (overrides the config file)
@@ -142,9 +142,9 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Print the JSON Schema for the environment config (spec §5)
+    /// Print the JSON Schema for the environment config
     Schema {},
-    /// Local mode cluster management (spec §10.2)
+    /// Local mode cluster management
     Local {
         #[command(subcommand)]
         action: LocalAction,
@@ -241,7 +241,7 @@ fn client(common: &Common) -> anyhow::Result<Client> {
     Client::new(&common.api, auth)
 }
 
-/// `up` is the auto-bootstrap entry point (CP-9.7): when the default local
+/// `up` is the auto-bootstrap entry point: when the default local
 /// api is not running, bring the whole local stack up first. A custom
 /// `--api` that is down stays a hard error.
 fn ensure_local_api(common: &Common) -> Result<(), CliError> {

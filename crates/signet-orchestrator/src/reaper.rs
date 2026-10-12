@@ -1,4 +1,4 @@
-// Reaper: deletes environment namespaces whose expires-at has passed (spec §13).
+// Reaper: deletes environment namespaces whose expires-at has passed.
 
 use chrono::{DateTime, Utc};
 use k8s_openapi::api::core::v1::Namespace;

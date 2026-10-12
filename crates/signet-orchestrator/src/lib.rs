@@ -27,12 +27,12 @@ const SECRET_NAME: &str = "signet-secrets";
 /// Marks a namespace as a signet environment namespace.
 pub const ENV_LABEL: &str = "signet.sandbox/environment";
 
-/// RFC 3339 timestamp; past-due namespaces are reaped (spec §13).
+/// RFC 3339 timestamp; past-due namespaces are reaped.
 pub const EXPIRES_AT_ANNOTATION: &str = "signet.sandbox/expires-at";
 
 const GATEWAY_NAME: &str = "signet-eg";
 const GATEWAY_NAMESPACE: &str = "signet-platform";
-// Per-env electrs TCP ports (spec §11.2). The local k3d cluster publishes a
+// Per-env electrs TCP ports. The local k3d cluster publishes a
 // narrow window; hosted clusters publish the full 50002-50502 range.
 pub const ELECTRUM_PORT_BASE: i32 = 50002;
 pub const ELECTRUM_PORT_MAX: i32 = 50011;
@@ -137,7 +137,7 @@ fn selected_specs(components: &EnvComponents) -> Vec<&'static ComponentSpec> {
 fn versionable_repo(key: &str) -> Option<&'static str> {
     match key {
         "bitcoind" => Some("bitcoin/bitcoin"),
-        // Versionable per spec §5, but deploys only in P3 (Lightning).
+        // Versionable, but deploys only with the Lightning component.
         "lnd" => Some("lightninglabs/lnd"),
         _ => COMPONENTS
             .iter()
@@ -1087,7 +1087,7 @@ mod tests {
             "v3.3.0".to_string(),
         )])))
         .unwrap();
-        // the bundle echo stays component-keyed per spec §12
+        // the bundle echo stays component-keyed
         assert!(!images.contains_key("explorer-web"));
 
         let patch = container_images(&images);

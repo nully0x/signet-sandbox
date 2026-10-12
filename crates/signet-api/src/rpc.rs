@@ -235,7 +235,7 @@ async fn resolve_environment(
     }
 }
 
-/// Lightning validation (spec §5): names unique per env; only lnd is
+/// Lightning validation: names unique per env; only lnd is
 /// buildable in v1 — the rest of the enum exists in the type space only.
 fn validate_lightning(instances: &[signet_core::env::LightningInstance]) -> Result<(), String> {
     let mut seen = std::collections::BTreeSet::new();
@@ -325,7 +325,7 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
         return Response::error(Some(id), Error::new(INVALID_PARAMS, message));
     }
 
-    // Lightning needs the indexer (spec §5): force it on rather than reject.
+    // Lightning needs the indexer: force it on rather than reject.
     let indexer = params.components.indexer || !params.components.lightning.is_empty();
 
     let env_id = Uuid::now_v7();

@@ -1,5 +1,5 @@
 // Local mode bootstrap: one long-lived k3d cluster hosting the API and the
-// environment namespaces (spec §10.2). Mirrors `just cluster-up`.
+// environment namespaces. Mirrors `just cluster-up`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

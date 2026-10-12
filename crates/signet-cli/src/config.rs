@@ -1,4 +1,4 @@
-// The sandbox.json config file (spec §5) translated into `CreateParams`.
+// The sandbox.json config file translated into `CreateParams`.
 
 use std::collections::BTreeMap;
 use std::path::Path;

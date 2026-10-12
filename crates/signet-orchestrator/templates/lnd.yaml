@@ -1,4 +1,4 @@
-# Per-instance LND (spec §5, §11): LND_NAME is substituted per instance
+# Per-instance LND: LND_NAME is substituted per instance
 # before apply. Connects to the environment's one bitcoind over RPC + ZMQ.
 # First boot creates the wallet (--noseedbackup: env wallets are disposable);
 # later boots unlock it. The admin macaroon is read by the api via exec.

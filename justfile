@@ -117,6 +117,20 @@ get-token:
     fi
     cargo run -q -p signet-cli -- token --nsec "$SIGNET_DEV_NSEC"
 
+# build and install the signet cli into ~/.local/bin (on PATH after a rehash)
+install-cli:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release -p signet-cli
+    mkdir -p "$HOME/.local/bin"
+    install -m 755 target/release/signet "$HOME/.local/bin/signet"
+    if [[ ":$PATH:" == *":$HOME/.local/bin:"* ]]; then
+        signet --version
+    else
+        echo 'installed, but ~/.local/bin is not on your PATH — add it:'
+        echo '  export PATH="$HOME/.local/bin:$PATH"'
+    fi
+
 test:
     cargo test --workspace
 

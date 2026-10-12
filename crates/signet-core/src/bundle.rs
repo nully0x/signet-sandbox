@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use crate::env::{BlockPolicy, EnvStatus};
 
-/// Per-instance credential (spec §5): the `type` discriminator leaves room
+/// Per-instance credential: the `type` discriminator leaves room
 /// for runes (CLN) and other schemes without a schema change.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BundleAuth {
@@ -35,7 +35,7 @@ pub struct ConnectionBundle {
     pub explorer_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub faucet_url: Option<String>,
-    /// Keyed by instance name (spec §5); empty and omitted when the env
+    /// Keyed by instance name; empty and omitted when the env
     /// has no Lightning instances or they are not ready yet.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub lightning: BTreeMap<String, LightningConnection>,
