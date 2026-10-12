@@ -30,7 +30,8 @@ cluster-up:
         kubectl -n envoy-gateway-system rollout status deploy/envoy-gateway --timeout=240s
         kubectl apply -f deploy/dev/gateway-eg.yaml
         kubectl wait --for=condition=accepted gatewayclass/signet-eg --timeout=120s
-        kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
+        # gateway-api CRDs come from the Envoy Gateway manifest; the
+        # standard install is redundant here (repo gotcha 16).
         echo 'cluster up: envoy gateway stack accepted'
     fi
 
