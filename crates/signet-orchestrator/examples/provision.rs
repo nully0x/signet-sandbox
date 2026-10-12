@@ -27,6 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 indexer: flags.iter().any(|f| f == "indexer"),
                 faucet: flags.iter().any(|f| f == "faucet"),
                 explorer: flags.iter().any(|f| f == "explorer"),
+                lightning: Vec::new(),
             };
             let expires_at = ttl_secs.map(|s| {
                 chrono::Utc::now()
@@ -43,7 +44,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 signet_challenge: key.challenge,
                 rpc_user: "signet".to_string(),
                 rpc_password: uuid::Uuid::new_v4().simple().to_string(),
+                lnd_wallet_password: uuid::Uuid::new_v4().simple().to_string(),
             };
+            let indexer = components.indexer;
+            let faucet = components.faucet;
+            let explorer = components.explorer;
+            let lightning_count = components.lightning.len();
             orchestrator
                 .create_environment(
                     &env_id,
@@ -55,8 +61,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .await?;
             println!(
-                "created env-{env_id} challenge={challenge} indexer={} faucet={} explorer={} ttl={:?}",
-                components.indexer, components.faucet, components.explorer, ttl_secs
+                "created env-{env_id} challenge={challenge} indexer={} faucet={} explorer={} lightning={} ttl={:?}",
+                indexer, faucet, explorer, lightning_count, ttl_secs
             );
         }
         "destroy" => {

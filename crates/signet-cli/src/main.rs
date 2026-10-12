@@ -471,7 +471,9 @@ mod tests {
 
     #[test]
     fn up_polls_until_ready_then_prints_the_bundle() {
+        // First request is the up() health probe; it only checks the status.
         let base = serve_sequence(vec![
+            "ok".to_string(),
             rpc_result(&bundle_json("provisioning")),
             rpc_result(&bundle_json("provisioning")),
             rpc_result(&bundle_json("ready")),
@@ -483,12 +485,16 @@ mod tests {
             json: false,
         };
         let result = up(None, Some("cli-test".into()), None, 10, 0, &common);
+        if let Err(e) = &result {
+            eprintln!("up error: {e:?}");
+        }
         assert!(result.is_ok(), "up failed");
     }
 
     #[test]
     fn up_fails_on_a_terminal_status_during_provisioning() {
         let base = serve_sequence(vec![
+            "ok".to_string(),
             rpc_result(&bundle_json("provisioning")),
             rpc_result(&bundle_json("destroyed")),
         ]);

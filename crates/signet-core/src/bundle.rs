@@ -4,11 +4,20 @@ use std::collections::BTreeMap;
 
 use crate::env::{BlockPolicy, EnvStatus};
 
+/// Per-instance credential (spec §5): the `type` discriminator leaves room
+/// for runes (CLN) and other schemes without a schema change.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BundleAuth {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub value: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LightningConnection {
     pub implementation: String,
     pub rest_url: String,
-    pub macaroon_or_rune: String,
+    pub auth: BundleAuth,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,8 +35,10 @@ pub struct ConnectionBundle {
     pub explorer_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub faucet_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lightning: Option<LightningConnection>,
+    /// Keyed by instance name (spec §5); empty and omitted when the env
+    /// has no Lightning instances or they are not ready yet.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub lightning: BTreeMap<String, LightningConnection>,
     pub signet_challenge: String,
     pub block_policy: BlockPolicy,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -50,7 +61,7 @@ mod tests {
             indexer_endpoint: None,
             explorer_url: None,
             faucet_url: None,
-            lightning: None,
+            lightning: BTreeMap::new(),
             signet_challenge: "5121030000ae".into(),
             block_policy: BlockPolicy::Interval30s,
             versions: None,
@@ -81,15 +92,42 @@ mod tests {
     fn enabled_components_are_included() {
         let mut b = core_bundle();
         b.explorer_url = Some("https://example/env/explorer".into());
-        b.lightning = Some(LightningConnection {
-            implementation: "lnd".into(),
-            rest_url: "https://example/env/ln/rest".into(),
-            macaroon_or_rune: "0201".into(),
-        });
+        b.lightning.insert(
+            "ln-alice".to_string(),
+            LightningConnection {
+                implementation: "lnd".into(),
+                rest_url: "https://example/env/ln/rest".into(),
+                auth: BundleAuth {
+                    kind: "macaroon".into(),
+                    value: "0201".into(),
+                },
+            },
+        );
         let obj = serde_json::to_value(b).unwrap();
         let obj = obj.as_object().unwrap();
         assert!(obj.contains_key("explorer_url"));
         assert!(obj.contains_key("lightning"));
+    }
+
+    #[test]
+    fn lightning_auth_uses_the_type_discriminator() {
+        let mut b = core_bundle();
+        b.lightning.insert(
+            "ln-alice".to_string(),
+            LightningConnection {
+                implementation: "lnd".into(),
+                rest_url: "https://example/ln".into(),
+                auth: BundleAuth {
+                    kind: "macaroon".into(),
+                    value: "0202".into(),
+                },
+            },
+        );
+        let json = serde_json::to_value(b).unwrap();
+        let entry = &json["lightning"]["ln-alice"];
+        assert_eq!(entry["implementation"], "lnd");
+        assert_eq!(entry["auth"]["type"], "macaroon");
+        assert_eq!(entry["auth"]["value"], "0202");
     }
 
     #[test]

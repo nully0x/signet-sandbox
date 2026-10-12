@@ -2,19 +2,22 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use k8s_openapi::api::apps::v1::{Deployment, StatefulSet};
-use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Secret, Service};
-use kube::api::{Api, ListParams, ObjectMeta, Patch, PatchParams, PostParams};
+use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Pod, Secret, Service};
+use kube::api::{Api, AttachParams, ListParams, ObjectMeta, Patch, PatchParams, PostParams};
 use kube::core::{ApiResource, DynamicObject};
 use kube::{Client, Error};
 use serde::Deserialize;
 use serde_json::json;
 use serde_yaml::Value;
+use signet_core::env::LightningInstance;
 
 mod reaper;
 
 const BITCOIND_MANIFEST: &str = include_str!("../templates/bitcoind.yaml");
 const SIGNER_MANIFEST: &str = include_str!("../templates/signer.yaml");
 const FAUCET_MANIFEST: &str = include_str!("../templates/faucet.yaml");
+const LND_MANIFEST: &str = include_str!("../templates/lnd.yaml");
+const LND_MACAROON_PATH: &str = "/root/.lnd/data/chain/bitcoin/signet/admin.macaroon";
 const ELECTRS_MANIFEST: &str = include_str!("../templates/electrs.yaml");
 const EXPLORER_MANIFEST: &str = include_str!("../templates/explorer.yaml");
 const HTTPROUTE_MANIFEST: &str = include_str!("../templates/httproute.yaml");
@@ -37,11 +40,12 @@ pub const ELECTRUM_PORT_MAX: i32 = 50011;
 const DEFAULT_BITCOIND_IMAGE: &str = "bitcoin/bitcoin:29.4";
 const DEFAULT_SIGNER_IMAGE: &str = "signet-signer:dev";
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct EnvComponents {
     pub indexer: bool,
     pub faucet: bool,
     pub explorer: bool,
+    pub lightning: Vec<LightningInstance>,
 }
 
 /// Optional per-env component. Adding a protocol is a new entry here plus a
@@ -251,6 +255,7 @@ pub struct EnvSecrets {
     pub signet_challenge: String,
     pub rpc_user: String,
     pub rpc_password: String,
+    pub lnd_wallet_password: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -265,6 +270,8 @@ pub enum OrchestrateError {
     Faucet(String),
     #[error("invalid signet challenge hex: {0}")]
     BadChallenge(String),
+    #[error("pod exec failed: {0}")]
+    Exec(String),
 }
 
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
@@ -472,6 +479,9 @@ impl Orchestrator {
         for spec in selected_specs(&components) {
             self.apply_manifest(&ns, spec.manifest, images).await?;
         }
+        for instance in &components.lightning {
+            self.apply_lnd(&ns, instance, images).await?;
+        }
         if components.explorer {
             self.apply_explorer_route(&ns, env_id).await?;
         }
@@ -482,6 +492,53 @@ impl Orchestrator {
             self.ensure_route_grant(&ns).await?;
         }
         Ok(())
+    }
+
+    /// Apply one Lightning instance's manifest. The template's LND_NAME
+    /// placeholder carries the instance name into every resource; the
+    /// container image comes from the resolved versions map.
+    async fn apply_lnd(
+        &self,
+        ns: &str,
+        instance: &LightningInstance,
+        images: &BTreeMap<String, String>,
+    ) -> Result<(), OrchestrateError> {
+        let manifest = LND_MANIFEST.replace("LND_NAME", &instance.name);
+        self.apply_manifest(ns, &manifest, images).await
+    }
+
+    /// In-cluster REST address of one Lightning instance. Reachable from
+    /// inside the cluster; from a host, use `kubectl port-forward`.
+    pub fn lightning_rest_url(&self, env_id: &str, instance: &str) -> String {
+        format!("https://lnd-{instance}.{}.svc:8080", namespace_for(env_id))
+    }
+
+    /// Read the admin macaroon out of the instance's pod (hex-encoded).
+    /// Fails while the wallet is still being created — callers treat that
+    /// as "not ready yet".
+    pub async fn lightning_admin_macaroon(
+        &self,
+        env_id: &str,
+        instance: &str,
+    ) -> Result<String, OrchestrateError> {
+        let ns = namespace_for(env_id);
+        let pods: Api<Pod> = Api::namespaced(self.client.clone(), &ns);
+        let attached = pods
+            .exec(
+                &format!("lnd-{instance}"),
+                vec!["cat", LND_MACAROON_PATH],
+                &AttachParams::default(),
+            )
+            .await?;
+        let mut attached = attached;
+        let mut stdout = attached
+            .stdout()
+            .ok_or_else(|| OrchestrateError::Exec("no stdout".to_string()))?;
+        let mut buf = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut stdout, &mut buf)
+            .await
+            .map_err(|e| OrchestrateError::Exec(e.to_string()))?;
+        Ok(encode_hex(&buf))
     }
 
     pub async fn destroy_environment(&self, env_id: &str) -> Result<(), OrchestrateError> {
@@ -715,6 +772,14 @@ impl Orchestrator {
                         .create(&PostParams::default(), &svc)
                         .await?;
                 }
+                "PersistentVolumeClaim" => {
+                    let mut pvc: k8s_openapi::api::core::v1::PersistentVolumeClaim =
+                        serde_yaml::from_value(value)?;
+                    pvc.metadata.namespace = Some(ns.to_string());
+                    Api::namespaced(self.client.clone(), ns)
+                        .create(&PostParams::default(), &pvc)
+                        .await?;
+                }
                 "Deployment" => {
                     let mut dep: Deployment = serde_yaml::from_value(value)?;
                     dep.metadata.namespace = Some(ns.to_string());
@@ -741,6 +806,16 @@ pub struct ManifestProbe {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn lnd_manifest_substitutes_the_instance_name() {
+        let manifest = LND_MANIFEST.replace("LND_NAME", "ln-alice");
+        assert!(!manifest.contains("LND_NAME"), "placeholder must be gone");
+        assert!(manifest.contains("lnd-ln-alice"));
+        let docs = Orchestrator::parse_docs(&manifest).unwrap();
+        let kinds: Vec<&str> = docs.iter().map(|v| v["kind"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["Service", "Deployment", "PersistentVolumeClaim"]);
+    }
+
     use super::*;
 
     #[test]

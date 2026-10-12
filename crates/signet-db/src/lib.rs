@@ -29,7 +29,6 @@ pub struct EnvironmentRow {
     pub component_explorer: bool,
     pub component_indexer: bool,
     pub component_faucet: bool,
-    pub component_lightning: Option<String>,
     pub rpc_endpoint: String,
     pub indexer_endpoint: Option<String>,
     pub explorer_endpoint: Option<String>,
@@ -167,6 +166,55 @@ pub async fn mark_expired_by_short_id(pool: &PgPool, short_id: &str) -> Result<u
     .await
     .map_err(DbError::from)?;
     Ok(result.rows_affected())
+}
+
+#[derive(FromRow, Debug, Clone)]
+pub struct LightningInstanceRow {
+    pub name: String,
+    pub implementation: String,
+}
+
+/// Replace the lightning instance list for one environment. The create
+/// path is the only caller; names are validated upstream.
+pub async fn set_lightning_instances(
+    pool: &PgPool,
+    env_id: Uuid,
+    instances: &[signet_core::env::LightningInstance],
+) -> Result<(), DbError> {
+    let mut tx = pool.begin().await.map_err(DbError::from)?;
+    sqlx::query("delete from environment_lightning where environment_id = $1")
+        .bind(env_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(DbError::from)?;
+    for instance in instances {
+        sqlx::query(
+            "insert into environment_lightning (environment_id, name, implementation) \
+             values ($1, $2, $3)",
+        )
+        .bind(env_id)
+        .bind(&instance.name)
+        .bind(instance.implementation.as_str())
+        .execute(&mut *tx)
+        .await
+        .map_err(DbError::from)?;
+    }
+    tx.commit().await.map_err(DbError::from)?;
+    Ok(())
+}
+
+pub async fn get_lightning_instances(
+    pool: &PgPool,
+    env_id: Uuid,
+) -> Result<Vec<LightningInstanceRow>, DbError> {
+    sqlx::query_as::<_, LightningInstanceRow>(
+        "select name, implementation from environment_lightning \
+         where environment_id = $1 order by name",
+    )
+    .bind(env_id)
+    .fetch_all(pool)
+    .await
+    .map_err(DbError::from)
 }
 
 // Sequential allocation inside the published electrum port range; the caller
