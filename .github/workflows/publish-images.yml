@@ -28,7 +28,7 @@ jobs:
           - image: signet-faucet
             dockerfile: deploy/docker/Dockerfile.signet-faucet
           # electrs is identified by its own version, not the repo tag:
-          # the versions map (spec §5) pins `electrs: <upstream release>`.
+          # the versions map pins `electrs: <upstream release>`.
           # Bump both the arg and the version together.
           - image: electrs
             dockerfile: deploy/docker/Dockerfile.electrs
@@ -63,6 +63,9 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
+          # Attestation manifests break containerd image imports on k3d.
+          provenance: false
+          sbom: false
           build-args: ${{ matrix.build_args }}
           tags: |
             ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.meta.outputs.version }}

@@ -26,7 +26,7 @@ cluster-up:
             [ "$i" = 90 ] && { echo 'node never became ready'; exit 1; }
             sleep 2
         done
-        kubectl apply --server-side -f https://github.com/envoyproxy/gateway/releases/download/v1.2.4/install.yaml
+        kubectl apply --server-side --force-conflicts -f https://github.com/envoyproxy/gateway/releases/download/v1.2.4/install.yaml
         kubectl -n envoy-gateway-system rollout status deploy/envoy-gateway --timeout=240s
         kubectl apply -f deploy/dev/gateway-eg.yaml
         kubectl wait --for=condition=accepted gatewayclass/signet-eg --timeout=120s
