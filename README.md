@@ -19,6 +19,23 @@ skip it and integration-test against mainnet with real funds instead.
 Signet Sandbox makes that a one-call provision: configuration in, connection
 bundle out, `ttl`-based teardown when you're done.
 
+## Quick start (local)
+
+All you need is Docker and the `signet` CLI (`just install-cli` from a
+checkout).
+
+```bash
+signet local init              # k3d cluster + images + postgres + provisioning api
+signet up --name first-env     # provisions an environment and prints the bundle
+signet token                   # bearer token for the api (Bruno, curl, CI)
+signet ls                      # list your environments
+signet down first-env          # tear it down
+```
+
+`signet up` reads `./sandbox.json` when present and points at the platform
+API with `--api` + `--token` for hosted use. See `docs/DEV.md` for the full
+development guide.
+
 ## How it works
 
 The provisioning API (Axum, JSON-RPC 2.0 over `POST /v1/rpc`) authenticates

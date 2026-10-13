@@ -176,8 +176,12 @@ signet local status    # cluster, api health, identity
 signet local down      # delete the cluster (profile kept)
 ```
 
+`signet up` picks up `./sandbox.json` automatically when no `--config` or
+`--name` is given; `--ttl` still overrides the file's ttl.
+
 `local init` writes `~/.signet/config.toml` (generated identity + token;
-the identity is stable, the token re-mints on every init). With no
+the identity is stable, the token re-mints on every init). `signet token`
+mints a fresh token from that identity for tools like Bruno. With no
 `SIGNET_TOKEN`/`SIGNET_NSEC`, commands fall back to the profile token,
 and `signet up` bootstraps the whole local stack first when the api on
 `localhost:8081` is not running.
