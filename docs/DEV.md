@@ -171,9 +171,9 @@ just install-cli        # build + install the signet binary into ~/.local/bin
 ```
 
 ```bash
-signet local init      # k3d cluster + images + postgres/api in-cluster + profile
-signet local status    # cluster, api health, identity
-signet local down      # delete the cluster (profile kept)
+signet bootstrap       # k3d cluster + images + postgres/api in-cluster + profile
+signet status          # cluster, api health, identity
+signet teardown        # delete the cluster (profile kept)
 ```
 
 `signet up` picks up `./sandbox.json` automatically when no `--config` or

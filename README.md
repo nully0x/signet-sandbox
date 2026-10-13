@@ -25,7 +25,7 @@ All you need is Docker and the `signet` CLI (`just install-cli` from a
 checkout).
 
 ```bash
-signet local init              # k3d cluster + images + postgres + provisioning api
+signet bootstrap               # k3d cluster + images + postgres + provisioning api
 signet up --name first-env     # provisions an environment and prints the bundle
 signet token                   # bearer token for the api (Bruno, curl, CI)
 signet ls                      # list your environments

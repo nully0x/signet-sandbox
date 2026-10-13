@@ -62,7 +62,7 @@ fn full_image(registry: &str, name: &str) -> String {
 
 const NODE_READY_TIMEOUT_SECS: u64 = 180;
 
-pub fn init() -> anyhow::Result<()> {
+pub fn bootstrap() -> anyhow::Result<()> {
     let bin = ensure_prerequisites()?;
     ensure_cluster(&bin)?;
     ensure_images()?;
@@ -125,7 +125,7 @@ pub fn status() -> anyhow::Result<()> {
 
 /// Tear the local cluster down. The profile survives: the identity is
 /// reused and the token re-minted by the next `signet local init`.
-pub fn down() -> anyhow::Result<()> {
+pub fn teardown() -> anyhow::Result<()> {
     let bin = bin_dir()?;
     run(k3d(&bin)?.args(["cluster", "delete", CLUSTER]))?;
     println!("cluster `{CLUSTER}` deleted (profile kept at ~/.signet/config.toml)");

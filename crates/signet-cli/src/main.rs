@@ -150,21 +150,12 @@ enum Command {
     },
     /// Print the JSON Schema for the environment config
     Schema {},
-    /// Local mode cluster management
-    Local {
-        #[command(subcommand)]
-        action: LocalAction,
-    },
-}
-
-#[derive(Subcommand)]
-enum LocalAction {
-    /// Create or start the local cluster and its gateway stack
-    Init,
-    /// Report cluster, api, and profile state
+    /// Create or start the local cluster and its platform stack
+    Bootstrap,
+    /// Report the local platform, api, and identity state
     Status,
-    /// Delete the local cluster (the profile is kept)
-    Down,
+    /// Delete the local cluster (environments go with it; the profile is kept)
+    Teardown,
 }
 
 #[derive(Args)]
@@ -211,15 +202,9 @@ fn run(command: Command) -> u8 {
         Command::Down { env, common } => down(&env, &common),
         Command::Token { nsec, api, json } => token(nsec, &api, json),
         Command::Schema {} => schema(),
-        Command::Local {
-            action: LocalAction::Init,
-        } => local::init().map_err(CliError::from),
-        Command::Local {
-            action: LocalAction::Status,
-        } => local::status().map_err(CliError::from),
-        Command::Local {
-            action: LocalAction::Down,
-        } => local::down().map_err(CliError::from),
+        Command::Bootstrap => local::bootstrap().map_err(CliError::from),
+        Command::Status => local::status().map_err(CliError::from),
+        Command::Teardown => local::teardown().map_err(CliError::from),
     };
     match result {
         Ok(()) => 0,
@@ -257,7 +242,7 @@ fn ensure_local_api(common: &Common) -> Result<(), CliError> {
             "no local api on {} — bootstrapping the local cluster",
             local::DEFAULT_LOCAL_API
         );
-        return local::init().map_err(CliError::from);
+        return local::bootstrap().map_err(CliError::from);
     }
     if !reachable {
         return Err(CliError::Other(anyhow::anyhow!(
