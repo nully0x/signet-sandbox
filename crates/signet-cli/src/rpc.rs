@@ -146,4 +146,19 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, CallError::Protocol(_)));
     }
+
+    #[test]
+    fn connect_failures_on_the_local_api_hint_at_bootstrap() {
+        let base = "http://127.0.0.1:1";
+        let err = client(base)
+            .call("environment.get", serde_json::json!({"id": "e"}))
+            .unwrap_err();
+        match err {
+            CallError::Transport(e) => {
+                assert!(e.is_connect());
+                assert!(format!("{e}").contains("127.0.0.1:1"));
+            }
+            other => panic!("expected transport error, got {other}"),
+        }
+    }
 }

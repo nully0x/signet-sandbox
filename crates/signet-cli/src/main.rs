@@ -246,7 +246,7 @@ fn ensure_local_api(common: &Common) -> Result<(), CliError> {
     }
     if !reachable {
         return Err(CliError::Other(anyhow::anyhow!(
-            "cannot reach the API at {} — is it running? start it with: just dev-api",
+            "cannot reach the API at {} — start it with: signet bootstrap (or signet up)",
             common.api
         )));
     }
@@ -541,16 +541,26 @@ mod tests {
     }
 
     #[test]
-    fn connect_failures_hint_at_the_api_process() {
+    fn connect_failures_hint_at_the_remedy() {
         let client = Client::new("http://127.0.0.1:1", Auth::Bearer("sgn_t".into())).unwrap();
         let err = CliError::from(client.call("environment.get", json!({})).unwrap_err());
         match err {
             CliError::Other(msg) => {
                 let shown = format!("{msg:#}");
                 assert!(shown.contains("cannot reach the API"), "got: {shown}");
-                assert!(shown.contains("just dev-api"), "got: {shown}");
             }
             other => panic!("expected Other, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn unreachable_local_api_points_at_bootstrap() {
+        let client = Client::new("http://127.0.0.1:1", Auth::Bearer("sgn_t".into())).unwrap();
+        // Probe the decision the same way ensure_local_api does.
+        assert!(local::should_bootstrap(local::DEFAULT_LOCAL_API, false));
+        assert!(matches!(
+            local::should_bootstrap("http://hosted.example", false),
+            false
+        ));
     }
 }

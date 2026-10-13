@@ -334,6 +334,8 @@ fn required_refs(name: &str, retags: &[&str]) -> Vec<String> {
     }
 }
 
+/// Docker's name normalization: a repo with a path component lives under
+/// its registry as-is; a bare repo lands in docker.io/library.
 fn fully_qualified(tag: &str) -> String {
     if tag.contains('/') {
         tag.to_string()
@@ -426,8 +428,10 @@ fn ensure_images() -> anyhow::Result<()> {
                 ]))?;
                 run_capture(Command::new("docker").args(["exec", &node, "sh", "-c",
                     "ctr -n k8s.io -a /run/k3s/containerd/containerd.sock images import /tmp/signet-transfer.tar"]))?;
+                // containerd normalizes the imported name; tag from that.
+                let imported_ref = fully_qualified(host_ref);
                 for r in &required {
-                    if !listed.contains(&format!("{r}\n")) {
+                    if r != &imported_ref {
                         run_capture(Command::new("docker").args([
                             "exec",
                             &node,
@@ -438,7 +442,7 @@ fn ensure_images() -> anyhow::Result<()> {
                             "/run/k3s/containerd/containerd.sock",
                             "images",
                             "tag",
-                            host_ref,
+                            &imported_ref,
                             r,
                         ]))?;
                     }
