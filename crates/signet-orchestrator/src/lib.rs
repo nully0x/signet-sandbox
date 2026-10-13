@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde_json::json;
 use serde_yaml::Value;
 use signet_core::env::LightningInstance;
+use signet_core::versions::VersionCatalog;
 
 mod reaper;
 
@@ -37,7 +38,6 @@ const GATEWAY_NAMESPACE: &str = "signet-platform";
 pub const ELECTRUM_PORT_BASE: i32 = 50002;
 pub const ELECTRUM_PORT_MAX: i32 = 50011;
 
-const DEFAULT_BITCOIND_IMAGE: &str = "bitcoin/bitcoin:29.4";
 const DEFAULT_SIGNER_IMAGE: &str = "signet-signer:dev";
 
 #[derive(Debug, Clone, Default)]
@@ -51,6 +51,16 @@ pub struct EnvComponents {
 /// Optional per-env component. Adding a protocol is a new entry here plus a
 /// template; `containers` maps every pod container to its platform-owned repo
 /// so image patching finds it.
+/// Versionable components: (key, repo, registry prefix). Registries:
+/// upstream images live on docker.io (empty prefix); self-published ones
+/// on the platform registry.
+pub const VERSIONED_COMPONENTS: &[(&str, &str, &str)] = &[
+    ("bitcoind", "bitcoin/bitcoin", "docker.io/"),
+    ("electrs", "electrs", "ghcr.io/nully0x/"),
+    ("lnd", "lightninglabs/lnd", "docker.io/"),
+    ("explorer", "mempool/backend", "docker.io/"),
+];
+
 pub struct ComponentSpec {
     pub key: &'static str,
     pub manifest: &'static str,
@@ -134,18 +144,6 @@ fn selected_specs(components: &EnvComponents) -> Vec<&'static ComponentSpec> {
         .collect()
 }
 
-fn versionable_repo(key: &str) -> Option<&'static str> {
-    match key {
-        "bitcoind" => Some("bitcoin/bitcoin"),
-        // Versionable, but deploys only with the Lightning component.
-        "lnd" => Some("lightninglabs/lnd"),
-        _ => COMPONENTS
-            .iter()
-            .find(|c| c.key == key && c.versionable)
-            .map(|c| c.repo),
-    }
-}
-
 fn validate_tag(tag: &str) -> Result<(), VersionError> {
     if tag.is_empty()
         || tag.len() > 64
@@ -164,27 +162,45 @@ pub enum VersionError {
     UnknownComponent(String),
     #[error("invalid image tag `{0}` (expected alphanumeric with . _ -)")]
     BadTag(String),
+    #[error("{0}")]
+    Incompatible(String),
 }
 
+/// Resolve the final image map for an environment: platform components
+/// keep their local dev tags; versionable components resolve to
+/// registry-qualified refs — the user's pin, or the catalog default.
+/// Pinned versions must exist in the catalog and satisfy its
+/// compatibility constraints.
 pub fn resolve_images(
+    catalog: &VersionCatalog,
     tags: &Option<BTreeMap<String, String>>,
 ) -> Result<BTreeMap<String, String>, VersionError> {
-    let mut images = BTreeMap::from([
-        ("bitcoind".to_string(), DEFAULT_BITCOIND_IMAGE.to_string()),
-        ("signer".to_string(), DEFAULT_SIGNER_IMAGE.to_string()),
-    ]);
-    for spec in COMPONENTS {
-        images.insert(spec.key.to_string(), spec.default_image());
+    if let Some(tags) = tags {
+        for (_component, tag) in tags {
+            validate_tag(tag)?;
+        }
     }
-    let Some(tags) = tags else {
-        return Ok(images);
-    };
-    for (component, tag) in tags {
+    if let Err(message) = catalog.validate_selection(tags.as_ref().unwrap_or(&BTreeMap::new())) {
+        return Err(VersionError::Incompatible(message));
+    }
+    let mut images = BTreeMap::from([
+        ("signer".to_string(), DEFAULT_SIGNER_IMAGE.to_string()),
+        ("faucet".to_string(), "signet-faucet:dev".to_string()),
+    ]);
+    for (component, repo, registry) in VERSIONED_COMPONENTS {
+        let tag = tags
+            .as_ref()
+            .and_then(|tags| tags.get(*component))
+            .map(String::as_str)
+            .or_else(|| catalog.default_version(component))
+            .ok_or_else(|| VersionError::UnknownComponent(component.to_string()))?;
         validate_tag(tag)?;
-        let Some(repo) = versionable_repo(component) else {
-            return Err(VersionError::UnknownComponent(component.clone()));
-        };
-        images.insert(component.clone(), format!("{repo}:{tag}"));
+        images.insert(component.to_string(), format!("{registry}{repo}:{tag}"));
+    }
+    // The explorer pod pins backend and frontend to the same tag.
+    if let Some(backend) = images.get("explorer").cloned() {
+        let frontend = backend.replacen("mempool/backend", "mempool/frontend", 1);
+        images.insert("explorer-web".to_string(), frontend);
     }
     Ok(images)
 }
@@ -208,9 +224,12 @@ fn container_images(images: &BTreeMap<String, String>) -> BTreeMap<String, Strin
     for (key, image) in images {
         match COMPONENTS.iter().find(|s| s.key == key) {
             Some(spec) => {
-                let tag = image.rsplit(':').next().unwrap_or(image);
+                // Multi-container pods share the tag; swap the repo in the
+                // resolved (registry-qualified) ref.
+                let first_repo = spec.containers[0].1;
                 for (container, repo) in spec.containers {
-                    patched.insert(container.to_string(), format!("{repo}:{tag}"));
+                    let reference = image.replacen(first_repo, repo, 1);
+                    patched.insert(container.to_string(), reference);
                 }
             }
             // bitcoind, signer: the container name equals the key.
@@ -270,6 +289,8 @@ pub enum OrchestrateError {
     Faucet(String),
     #[error("invalid signet challenge hex: {0}")]
     BadChallenge(String),
+    #[error("{0}")]
+    Incompatible(String),
     #[error("pod exec failed: {0}")]
     Exec(String),
 }
@@ -903,15 +924,20 @@ mod tests {
         assert_eq!(body["amount_sat"], 5000);
     }
 
+    fn catalog() -> VersionCatalog {
+        VersionCatalog::embedded()
+    }
+
     #[test]
     fn resolve_images_defaults_without_request() {
-        let images = resolve_images(&None).unwrap();
+        let images = resolve_images(&catalog(), &None).unwrap();
         for (key, image) in [
-            ("bitcoind", "bitcoin/bitcoin:29.4"),
+            ("bitcoind", "docker.io/bitcoin/bitcoin:29.4"),
             ("signer", "signet-signer:dev"),
             ("faucet", "signet-faucet:dev"),
-            ("electrs", "electrs:dev"),
-            ("explorer", "mempool/backend:v3.3.1"),
+            ("electrs", "ghcr.io/nully0x/electrs:0.11.1"),
+            ("explorer", "docker.io/mempool/backend:v3.3.1"),
+            ("lnd", "docker.io/lightninglabs/lnd:0.19.2-beta"),
         ] {
             assert_eq!(images.get(key).unwrap(), image, "{key}");
         }
@@ -1082,19 +1108,22 @@ mod tests {
 
     #[test]
     fn explorer_version_pins_backend_and_frontend_together() {
-        let images = resolve_images(&Some(BTreeMap::from([(
-            "explorer".to_string(),
-            "v3.3.0".to_string(),
-        )])))
+        let images = resolve_images(
+            &catalog(),
+            &Some(BTreeMap::from([(
+                "explorer".to_string(),
+                "v3.3.1".to_string(),
+            )])),
+        )
         .unwrap();
-        // the bundle echo stays component-keyed
-        assert!(!images.contains_key("explorer-web"));
-
         let patch = container_images(&images);
-        assert_eq!(patch.get("explorer").unwrap(), "mempool/backend:v3.3.0");
+        assert_eq!(
+            patch.get("explorer").unwrap(),
+            "docker.io/mempool/backend:v3.3.1"
+        );
         assert_eq!(
             patch.get("explorer-web").unwrap(),
-            "mempool/frontend:v3.3.0"
+            "docker.io/mempool/frontend:v3.3.1"
         );
 
         let docs = Orchestrator::parse_docs(EXPLORER_MANIFEST).unwrap();
@@ -1109,8 +1138,8 @@ mod tests {
             .unwrap();
         patch_images(&mut pod.containers, &patch);
         for (name, image) in [
-            ("explorer", "mempool/backend:v3.3.0"),
-            ("explorer-web", "mempool/frontend:v3.3.0"),
+            ("explorer", "docker.io/mempool/backend:v3.3.1"),
+            ("explorer-web", "docker.io/mempool/frontend:v3.3.1"),
         ] {
             let container = pod.containers.iter().find(|c| c.name == name).unwrap();
             assert_eq!(container.image.as_deref(), Some(image));
@@ -1123,35 +1152,37 @@ mod tests {
             name: "electrs".into(),
             ..Default::default()
         }];
-        let images = resolve_images(&Some(BTreeMap::from([(
-            "electrs".to_string(),
-            "0.10.9".to_string(),
-        )])))
+        let images = resolve_images(
+            &catalog(),
+            &Some(BTreeMap::from([(
+                "electrs".to_string(),
+                "0.10.9".to_string(),
+            )])),
+        )
         .unwrap();
         patch_images(&mut containers, &images);
-        assert_eq!(containers[0].image.as_deref(), Some("electrs:0.10.9"));
+        assert_eq!(
+            containers[0].image.as_deref(),
+            Some("ghcr.io/nully0x/electrs:0.10.9")
+        );
     }
 
     #[test]
-    fn resolve_images_merges_user_tags() {
-        let tags = Some(BTreeMap::from([(
-            "bitcoind".to_string(),
-            "28.1".to_string(),
-        )]));
-        let images = resolve_images(&tags).unwrap();
-        assert_eq!(images.get("bitcoind").unwrap(), "bitcoin/bitcoin:28.1");
-        assert_eq!(images.get("signer").unwrap(), "signet-signer:dev");
-    }
-
-    #[test]
-    fn resolve_images_versions_explorer_tag() {
+    fn resolve_images_versions_lnd_and_explorer_tags() {
         let tags = Some(BTreeMap::from([
-            ("explorer".to_string(), "v3.3.0".to_string()),
+            ("explorer".to_string(), "v3.3.1".to_string()),
             ("lnd".to_string(), "0.18.5-beta".to_string()),
         ]));
-        let images = resolve_images(&tags).unwrap();
-        assert_eq!(images.get("explorer").unwrap(), "mempool/backend:v3.3.0");
-        assert_eq!(images.get("lnd").unwrap(), "lightninglabs/lnd:0.18.5-beta");
+        let images = resolve_images(&catalog(), &tags).unwrap();
+        assert_eq!(
+            images.get("explorer").unwrap(),
+            "docker.io/mempool/backend:v3.3.1"
+        );
+        assert_eq!(
+            images.get("lnd").unwrap(),
+            "docker.io/lightninglabs/lnd:0.18.5-beta"
+        );
+        assert_eq!(images.get("signer").unwrap(), "signet-signer:dev");
     }
 
     #[test]
@@ -1160,8 +1191,8 @@ mod tests {
             let tags = Some(BTreeMap::from([(component.to_string(), "1.0".to_string())]));
             assert!(
                 matches!(
-                    resolve_images(&tags),
-                    Err(VersionError::UnknownComponent(_))
+                    resolve_images(&catalog(), &tags),
+                    Err(VersionError::Incompatible(_))
                 ),
                 "{component}"
             );
@@ -1169,11 +1200,24 @@ mod tests {
     }
 
     #[test]
+    fn resolve_images_rejects_versions_outside_the_catalog() {
+        let tags = Some(BTreeMap::from([(
+            "bitcoind".to_string(),
+            "28.1".to_string(),
+        )]));
+        let err = resolve_images(&catalog(), &tags).unwrap_err();
+        assert!(err.to_string().contains("unknown version"), "{err}");
+    }
+
+    #[test]
     fn resolve_images_rejects_bad_tags() {
         for tag in ["", "a b", "$(id)", &"x".repeat(65)] {
             let tags = Some(BTreeMap::from([("bitcoind".to_string(), tag.to_string())]));
             assert!(
-                matches!(resolve_images(&tags), Err(VersionError::BadTag(_))),
+                matches!(
+                    resolve_images(&catalog(), &tags),
+                    Err(VersionError::BadTag(_))
+                ),
                 "{tag:?}"
             );
         }

@@ -9,6 +9,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use signet_core::bundle::{ConnectionBundle, LightningConnection};
 use signet_core::env::{BlockPolicy, CreateParams, EnvStatus};
+use signet_core::versions::VersionCatalog;
 use signet_db::{EnvironmentRow, PgPool};
 use signet_nostr::{ApiToken, verify_nip98_header};
 use signet_orchestrator::{EnvComponents, EnvSecrets, Orchestrator};
@@ -26,6 +27,7 @@ use uuid::Uuid;
 pub struct AppState {
     pool: PgPool,
     orchestrator: Arc<Orchestrator>,
+    catalog: VersionCatalog,
     public_url: String,
     nip98_max_age: Option<Duration>,
 }
@@ -45,6 +47,7 @@ impl std::fmt::Debug for Caller {
 pub fn router(
     pool: PgPool,
     orchestrator: Orchestrator,
+    catalog: VersionCatalog,
     public_url: String,
     nip98_max_age: Option<Duration>,
 ) -> Router {
@@ -52,6 +55,7 @@ pub fn router(
         .route("/healthz", get(healthz))
         .route("/v1/rpc", post(dispatch))
         .with_state(AppState {
+            catalog,
             pool,
             orchestrator: Arc::new(orchestrator),
             public_url,
@@ -167,6 +171,7 @@ async fn handle(state: &AppState, caller: Caller, via_nip98: bool, request: Requ
             unauthenticated("token.create requires NIP-98 authentication"),
         ),
         "token.create" => token_create(state, id, caller).await,
+        "catalog.list" => catalog_list(state, id).await,
         "environment.create" => environment_create(state, id, caller, request.params).await,
         "environment.list" => environment_list(state, id, caller).await,
         "environment.get" => environment_get(state, id, caller, request.params).await,
@@ -176,6 +181,14 @@ async fn handle(state: &AppState, caller: Caller, via_nip98: bool, request: Requ
         "environment.faucet" => environment_faucet(state, id, caller, request.params).await,
         _ => Response::error(Some(id), Error::method_not_found(&request.method)),
     }
+}
+
+/// The version catalog for UI dropdowns and client-side validation.
+async fn catalog_list(state: &AppState, id: Id) -> Response {
+    Response::result(
+        Some(id),
+        serde_json::to_value(state.catalog.entries()).expect("catalog serializes"),
+    )
 }
 
 async fn token_create(state: &AppState, id: Id, caller: Caller) -> Response {
@@ -299,7 +312,7 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
         Err(e) => return Response::error(Some(id), Error::new(INVALID_PARAMS, e.to_string())),
     };
 
-    let images = match signet_orchestrator::resolve_images(&params.versions) {
+    let images = match signet_orchestrator::resolve_images(&state.catalog, &params.versions) {
         Ok(images) => images,
         Err(e) => return Response::error(Some(id), Error::new(INVALID_PARAMS, e.to_string())),
     };

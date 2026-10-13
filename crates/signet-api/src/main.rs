@@ -103,9 +103,11 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("reaper disabled");
     }
 
+    let catalog = signet_core::versions::VersionCatalog::embedded();
     let app = rpc::router(
         pool,
         orchestrator,
+        catalog,
         args.public_url,
         if args.nip98_max_age_secs == 0 {
             None

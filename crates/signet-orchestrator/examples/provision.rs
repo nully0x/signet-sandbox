@@ -54,7 +54,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .create_environment(
                     &env_id,
                     &secrets,
-                    &signet_orchestrator::resolve_images(&None).unwrap(),
+                    &signet_orchestrator::resolve_images(
+                        &signet_core::versions::VersionCatalog::embedded(),
+                        &None,
+                    )
+                    .unwrap(),
                     components,
                     None,
                     expires_at,

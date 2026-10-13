@@ -1,0 +1,30 @@
+# Platform-supported component versions. The single source of truth for
+# what users can pin: the API validates `versions` against this catalog,
+# the UI renders its choices from `catalog.list`, and the publish workflow
+# generates its build matrix from it. Adding a version = adding a block
+# (and landing the image in the registry).
+#
+# version strings are the image tags themselves. `default` (one per
+# component) is used when the user does not pin. `requires` constrains
+# other components' versions; create is rejected when a selection
+# violates one. Add a `requires` only for verified incompatibilities —
+# the constraint is enforced hard at create time.
+
+[bitcoind."29.4"]
+default = true
+
+[electrs."0.11.1"]
+default = true
+
+[electrs."0.10.9"]
+
+
+[lnd."0.19.2-beta"]
+default = true
+requires = { bitcoind = ">= 25" }
+
+[lnd."0.18.5-beta"]
+requires = { bitcoind = ">= 24" }
+
+[explorer."v3.3.1"]
+default = true
