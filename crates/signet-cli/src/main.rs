@@ -131,6 +131,12 @@ enum Command {
         common: Common,
     },
     /// Mint a bearer API token (NIP-98-only; prints the raw token)
+    ///
+    /// Without --nsec, signs with the local profile identity from
+    /// ~/.signet/config.toml (created by `signet local init`).
+    #[command(
+        after_help = "Examples:\n  signet token                  # mint with the local profile identity\n  signet token --nsec <key>     # mint with an explicit key\n  signet token | sed 's/^/bearer=/'"
+    )]
     Token {
         /// Nostr secret key (nsec… or hex) that signs the mint request
         #[arg(long, env = "SIGNET_NSEC")]
@@ -272,9 +278,18 @@ fn up(
 ) -> Result<(), CliError> {
     ensure_local_api(common)?;
     let client = client(common)?;
+    // Project convention: a sandbox.json in the working directory is the
+    // default config when no --config or --name is given.
     let cfg = match &config_path {
         Some(path) => Some(config::load_config(path)?),
-        None => None,
+        None => {
+            let default_path = std::path::Path::new("sandbox.json");
+            if default_path.exists() {
+                Some(config::load_config(default_path)?)
+            } else {
+                None
+            }
+        }
     };
     let params = config::build_create_params(cfg.as_ref(), name, ttl)?;
 
@@ -413,8 +428,19 @@ pub(crate) fn mint_token(api: &str, key: &str) -> anyhow::Result<String> {
 }
 
 fn token(nsec: Option<String>, api: &str, json: bool) -> Result<(), CliError> {
-    let key =
-        nsec.ok_or_else(|| anyhow::anyhow!("no NIP-98 key: pass --nsec or set SIGNET_NSEC"))?;
+    // No explicit key: mint from the local profile identity (same fallback
+    // rule as every other command's credential resolution).
+    let key = match nsec.as_deref().filter(|k| !k.is_empty()) {
+        Some(key) => key.to_string(),
+        None => {
+            let profile = crate::profile::load().map_err(|e| {
+                anyhow::anyhow!(
+                    "no NIP-98 key and no profile — pass --nsec, set SIGNET_NSEC, or run signet local init ({e})"
+                )
+            })?;
+            profile.nsec
+        }
+    };
     let raw = mint_token(api, &key)?;
     if json {
         output::print_json(&json!({ "token": raw }))?;
