@@ -64,15 +64,8 @@ const NODE_READY_TIMEOUT_SECS: u64 = 180;
 
 pub fn init() -> anyhow::Result<()> {
     let bin = ensure_prerequisites()?;
-    ensure_binary(&bin, "k3d", &k3d_download_url(), None)?;
-    ensure_binary(
-        &bin,
-        "kubectl",
-        &kubectl_download_url(),
-        Some(&kubectl_version_url()),
-    )?;
     ensure_cluster(&bin)?;
-    pull_images(bin.as_path())?;
+    ensure_images()?;
     install_gateway(bin.as_path())?;
     deploy_local_stack(bin.as_path())?;
     wait_api()?;
@@ -95,7 +88,7 @@ pub fn init() -> anyhow::Result<()> {
 /// Report cluster, api, and profile state without changing anything.
 pub fn status() -> anyhow::Result<()> {
     let bin = bin_dir()?;
-    let cluster = k3d(&bin)
+    let cluster = k3d(&bin)?
         .args(["cluster", "get", CLUSTER])
         .output()
         .map(|o| o.status.success())
@@ -134,7 +127,7 @@ pub fn status() -> anyhow::Result<()> {
 /// reused and the token re-minted by the next `signet local init`.
 pub fn down() -> anyhow::Result<()> {
     let bin = bin_dir()?;
-    run(k3d(&bin).args(["cluster", "delete", CLUSTER]))?;
+    run(k3d(&bin)?.args(["cluster", "delete", CLUSTER]))?;
     println!("cluster `{CLUSTER}` deleted (profile kept at ~/.signet/config.toml)");
     Ok(())
 }
@@ -158,34 +151,6 @@ fn ensure_prerequisites() -> anyhow::Result<PathBuf> {
 fn bin_dir() -> anyhow::Result<PathBuf> {
     let home = std::env::var("HOME").context("HOME is not set")?;
     Ok(Path::new(&home).join(".signet").join("bin"))
-}
-
-fn ensure_binary(
-    bin: &Path,
-    name: &str,
-    download_url: &str,
-    version_url: Option<&str>,
-) -> anyhow::Result<()> {
-    if have_on_path(name) || bin.join(name).exists() {
-        return Ok(());
-    }
-    let url = match version_url {
-        Some(pattern) => {
-            let version = fetch_text(pattern)?;
-            download_url.replace("{version}", version.trim())
-        }
-        None => download_url.to_string(),
-    };
-    println!("downloading {name} into {}", bin.display());
-    let body = fetch_bytes(&url)?;
-    let target = bin.join(name);
-    std::fs::write(&target, &body)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))?;
-    }
-    Ok(())
 }
 
 fn have_on_path(name: &str) -> bool {
@@ -243,8 +208,40 @@ fn arch_name() -> &'static str {
     }
 }
 
-fn k3d(bin: &Path) -> Command {
-    let mut cmd = Command::new(bin.join("k3d"));
+/// Resolve a bootstrap tool into a ready Command. The vendored copy in the
+/// bin dir wins, then PATH; neither present, the binary is downloaded into
+/// the bin dir. The resolution must match how the command is built — a
+/// download-skip must never leave the command pointing at a missing file.
+fn tool(
+    bin: &Path,
+    name: &str,
+    download_url: &str,
+    version_url: Option<&str>,
+) -> anyhow::Result<Command> {
+    let vendored = bin.join(name);
+    if !vendored.exists() && !have_on_path(name) {
+        println!("downloading {name} into {}", bin.display());
+        let url = match version_url {
+            Some(pattern) => {
+                let version = fetch_text(pattern)?;
+                download_url.replace("{version}", version.trim())
+            }
+            None => download_url.to_string(),
+        };
+        let body = fetch_bytes(&url)?;
+        std::fs::write(&vendored, &body)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&vendored, std::fs::Permissions::from_mode(0o755))?;
+        }
+    }
+    let program = if vendored.exists() {
+        vendored
+    } else {
+        PathBuf::from(name)
+    };
+    let mut cmd = Command::new(program);
     cmd.env(
         "PATH",
         format!(
@@ -253,24 +250,24 @@ fn k3d(bin: &Path) -> Command {
             std::env::var("PATH").unwrap_or_default()
         ),
     );
-    cmd
+    Ok(cmd)
 }
 
-fn kubectl(bin: &Path) -> Command {
-    let mut cmd = Command::new(bin.join("kubectl"));
-    cmd.env(
-        "PATH",
-        format!(
-            "{}:{}",
-            bin.display(),
-            std::env::var("PATH").unwrap_or_default()
-        ),
-    );
-    cmd
+fn k3d(bin: &Path) -> anyhow::Result<Command> {
+    tool(bin, "k3d", &k3d_download_url(), None)
+}
+
+fn kubectl(bin: &Path) -> anyhow::Result<Command> {
+    tool(
+        bin,
+        "kubectl",
+        &kubectl_download_url(),
+        Some(&kubectl_version_url()),
+    )
 }
 
 fn ensure_cluster(bin: &Path) -> anyhow::Result<()> {
-    let exists = k3d(bin)
+    let exists = k3d(bin)?
         .args(["cluster", "get", CLUSTER])
         .output()
         .map(|o| o.status.success())
@@ -278,10 +275,10 @@ fn ensure_cluster(bin: &Path) -> anyhow::Result<()> {
 
     if exists {
         println!("cluster exists; starting");
-        run(k3d(bin).args(["cluster", "start", CLUSTER]))?;
+        run(k3d(bin)?.args(["cluster", "start", CLUSTER]))?;
     } else {
         println!("creating k3d cluster `{CLUSTER}`");
-        run(k3d(bin)
+        run(k3d(bin)?
             .args(["cluster", "create", CLUSTER])
             .arg("--port")
             .arg("80:80@loadbalancer")
@@ -293,7 +290,7 @@ fn ensure_cluster(bin: &Path) -> anyhow::Result<()> {
             .arg("50002-50011:50002-50011@loadbalancer")
             .arg("--volume")
             .arg("signet-data:/var/lib/rancher/k3s/storage@server:0"))?;
-        run(k3d(bin).args(["kubeconfig", "write", CLUSTER]))?;
+        run(k3d(bin)?.args(["kubeconfig", "write", CLUSTER]))?;
     }
 
     wait_for_node(bin)?;
@@ -303,7 +300,7 @@ fn ensure_cluster(bin: &Path) -> anyhow::Result<()> {
 fn wait_for_node(bin: &Path) -> anyhow::Result<()> {
     println!("waiting for node ready…");
     for _ in 0..(NODE_READY_TIMEOUT_SECS / 2) {
-        let ready = kubectl(bin)
+        let ready = kubectl(bin)?
             .args([
                 "get",
                 "nodes",
@@ -321,51 +318,184 @@ fn wait_for_node(bin: &Path) -> anyhow::Result<()> {
     anyhow::bail!("node never became ready after {NODE_READY_TIMEOUT_SECS}s")
 }
 
-/// Pull every image the env manifests reference and import them into the
-/// k3d node. The import is verified inside the node: `k3d image import`
-/// can succeed without importing anything.
-fn pull_images(bin: &Path) -> anyhow::Result<()> {
-    let mut local_names: Vec<String> = Vec::new();
-    for (name, retags) in IMAGES {
-        let full = image(name);
-        println!("pulling {full}");
-        run(Command::new("docker").args(["pull", &full])).map_err(|e| {
-            anyhow::anyhow!("pulling {full} failed: {e} — has the publish-images workflow run?")
-        })?;
-        for tag in *retags {
-            run(Command::new("docker").args(["tag", &full, tag]))?;
-            local_names.push(tag.to_string());
+/// The refs that must exist in the node for one entry: the retag names
+/// when present, otherwise the pulled reference itself. Retags are
+/// normalized the way kubelet does it — a repo without a registry lives on
+/// docker.io under `library` — or the exact-name lookup never matches.
+fn required_refs(name: &str, retags: &[&str]) -> Vec<String> {
+    if retags.is_empty() {
+        if name.contains('/') {
+            vec![format!("docker.io/{name}")]
+        } else {
+            vec![image(name)]
         }
-        local_names.push(full);
+    } else {
+        retags.iter().map(|t| fully_qualified(t)).collect()
     }
-    import_images(bin, &local_names)
 }
 
-fn import_images(bin: &Path, names: &[String]) -> anyhow::Result<()> {
-    println!("importing {} images into the {CLUSTER} node", names.len());
-    let mut cmd = k3d(bin);
-    cmd.args(["image", "import"]);
-    for name in names {
-        cmd.arg(name);
+fn fully_qualified(tag: &str) -> String {
+    if tag.contains('/') {
+        tag.to_string()
+    } else {
+        format!("docker.io/library/{tag}")
     }
-    cmd.args(["-c", CLUSTER]);
-    run(&mut cmd)?;
+}
 
-    // Gotcha: k3d image import can silently no-op. Verify inside the node.
-    let node = format!("k3d-{CLUSTER}-server-0");
-    let listed = Command::new("docker")
-        .args(["exec", &node, "crictl", "img"])
+fn node_image_list(node: &str, socket: &str) -> String {
+    let mut out = Command::new("docker")
+        .args([
+            "exec", node, "ctr", "-n", "k8s.io", "-a", socket, "images", "ls", "-q",
+        ])
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
-    let missing: Vec<&String> = names
-        .iter()
-        .filter(|n| !listed.contains(n.as_str()))
-        .collect();
+    out.push('\n');
+    out
+}
+
+/// Run a command capturing output; stdout stays quiet, stderr is reported
+/// on failure. Returns the captured stdout.
+fn run_capture(cmd: &mut Command) -> anyhow::Result<String> {
+    let out = cmd.output()?;
     anyhow::ensure!(
-        missing.is_empty(),
-        "images did not land in the node: {missing:?}"
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr).trim()
     );
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// Ensure every image the env manifests reference exists in the node's
+/// containerd. Resolution order per image: already in the node, available
+/// on the host docker (transferred without touching the registry), then a
+/// quiet remote pull. Per-image errors are reported as they happen; the
+/// command fails at the end if anything is unresolved.
+fn ensure_images() -> anyhow::Result<()> {
+    let node = format!("k3d-{CLUSTER}-server-0");
+    let socket = "/run/k3s/containerd/containerd.sock";
+    let mut listed = node_image_list(&node, socket);
+
+    let total = IMAGES.len();
+    let mut failed: Vec<String> = Vec::new();
+
+    for (index, (name, retags)) in IMAGES.iter().enumerate() {
+        let required = required_refs(name, retags);
+        let satisfied = required.iter().all(|r| listed.contains(&format!("{r}\n")));
+        let label = required.join(", ");
+        if satisfied {
+            println!("[{}/{total}] {label} — already in the node", index + 1);
+            continue;
+        }
+
+        // Host docker first: transfer without touching the registry.
+        let host_candidates: Vec<String> = if name.contains('/') {
+            vec![name.to_string()]
+        } else {
+            vec![name.to_string(), image(name)]
+        };
+        let host_ref = host_candidates
+            .iter()
+            .find(|r| {
+                Command::new("docker")
+                    .args(["image", "inspect", r])
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false)
+            })
+            .cloned();
+
+        let mut done = false;
+        if let Some(host_ref) = &host_ref {
+            println!(
+                "[{}/{total}] {label} — from local docker ({host_ref})",
+                index + 1
+            );
+            let transfer = || -> anyhow::Result<()> {
+                let tar = std::env::temp_dir().join("signet-image-transfer.tar");
+                run_capture(
+                    Command::new("docker")
+                        .args(["save", "-o"])
+                        .arg(&tar)
+                        .arg(host_ref),
+                )?;
+                run_capture(Command::new("docker").args([
+                    "cp",
+                    &tar.to_string_lossy(),
+                    &format!("{node}:/tmp/signet-transfer.tar"),
+                ]))?;
+                run_capture(Command::new("docker").args(["exec", &node, "sh", "-c",
+                    "ctr -n k8s.io -a /run/k3s/containerd/containerd.sock images import /tmp/signet-transfer.tar"]))?;
+                for r in &required {
+                    if !listed.contains(&format!("{r}\n")) {
+                        run_capture(Command::new("docker").args([
+                            "exec",
+                            &node,
+                            "ctr",
+                            "-n",
+                            "k8s.io",
+                            "-a",
+                            "/run/k3s/containerd/containerd.sock",
+                            "images",
+                            "tag",
+                            host_ref,
+                            r,
+                        ]))?;
+                    }
+                }
+                let _ = std::fs::remove_file(&tar);
+                Ok(())
+            };
+            match transfer() {
+                Ok(()) => {
+                    for r in &required {
+                        listed.push_str(&format!("{r}\n"));
+                    }
+                    done = true;
+                }
+                Err(e) => println!("  host transfer failed ({e}); falling back to the registry"),
+            }
+        }
+
+        // Remote pull into the node's containerd.
+        if !done {
+            let source = if name.contains('/') {
+                format!("docker.io/{name}")
+            } else {
+                image(name)
+            };
+            println!("[{}/{total}] {label} — pulling {source}", index + 1);
+            match ctr_quiet(&node, &["pull", &source]) {
+                Ok(_) => {
+                    for r in &required {
+                        if !listed.contains(&format!("{r}\n")) {
+                            ctr_quiet(&node, &["tag", &source, r])?;
+                            listed.push_str(&format!("{r}\n"));
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("  pull failed: {e}");
+                    failed.push(label.clone());
+                    continue;
+                }
+            }
+        }
+    }
+
+    if !failed.is_empty() {
+        anyhow::bail!("images failed to resolve: {failed:?}");
+    }
+    Ok(())
+}
+
+fn ctr_quiet(node: &str, args: &[&str]) -> anyhow::Result<()> {
+    let mut cmd = Command::new("docker");
+    cmd.args(["exec", node, "ctr", "-n", "k8s.io", "-a"])
+        .arg("/run/k3s/containerd/containerd.sock")
+        .args(["images"])
+        .args(args);
+    run_capture(&mut cmd)?;
     Ok(())
 }
 
@@ -376,7 +506,7 @@ fn deploy_local_stack(bin: &Path) -> anyhow::Result<()> {
     println!("deploying postgres + provisioning api");
     let manifest = LOCAL_STACK_MANIFEST.replace("REGISTRY_PLACEHOLDER", &registry());
     write_stdin_manifest(bin, &manifest)?;
-    run(kubectl(bin).args([
+    run(kubectl(bin)?.args([
         "-n",
         PLATFORM_NAMESPACE,
         "rollout",
@@ -384,7 +514,7 @@ fn deploy_local_stack(bin: &Path) -> anyhow::Result<()> {
         "deploy/postgres",
         "--timeout=180s",
     ]))?;
-    run(kubectl(bin).args([
+    run(kubectl(bin)?.args([
         "-n",
         PLATFORM_NAMESPACE,
         "rollout",
@@ -393,22 +523,6 @@ fn deploy_local_stack(bin: &Path) -> anyhow::Result<()> {
         "--timeout=180s",
     ]))?;
     Ok(())
-}
-
-/// The k3d serverlb maps host 8081 to the api's LoadBalancer service; poll
-/// until the routing chain answers.
-fn wait_api() -> anyhow::Result<()> {
-    println!("waiting for the api on http://localhost:8081…");
-    for _ in 0..30 {
-        if reqwest::blocking::get("http://localhost:8081/healthz")
-            .map(|r| r.status().is_success())
-            .unwrap_or(false)
-        {
-            return Ok(());
-        }
-        std::thread::sleep(Duration::from_secs(2));
-    }
-    anyhow::bail!("api did not become healthy on localhost:8081 within 60s")
 }
 
 /// Probe the api health endpoint with a short timeout; used by `local
@@ -428,17 +542,45 @@ pub(crate) fn api_healthy(url: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// The k3d serverlb maps host 8081 to the api's LoadBalancer service; poll
+/// until the routing chain answers.
+fn wait_api() -> anyhow::Result<()> {
+    println!("waiting for the api on {DEFAULT_LOCAL_API}…");
+    for _ in 0..30 {
+        if api_healthy(DEFAULT_LOCAL_API) {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    anyhow::bail!("api did not become healthy on {DEFAULT_LOCAL_API} within 60s")
+}
+
+/// Drop CustomResourceDefinition documents from a multi-doc manifest.
+/// k3s manages the gateway-api CRDs itself; EG's bundled copies must not
+/// overwrite them.
+fn strip_crd_docs(manifest: &str) -> String {
+    use serde::Deserialize as _;
+    let docs: Vec<serde_yaml::Value> = serde_yaml::Deserializer::from_str(manifest)
+        .map(|doc| serde_yaml::Value::deserialize(doc).unwrap())
+        .filter(|doc| doc["kind"].as_str() != Some("CustomResourceDefinition"))
+        .collect();
+    docs.iter()
+        .map(|doc| serde_yaml::to_string(doc).unwrap())
+        .collect::<Vec<_>>()
+        .join("---\n")
+}
+
 fn install_gateway(bin: &Path) -> anyhow::Result<()> {
     println!("installing the envoy gateway stack");
-    run(kubectl(bin).args([
-        "apply",
-        "--server-side",
-        "-f",
-        &format!(
-            "https://github.com/envoyproxy/gateway/releases/download/{EG_VERSION}/install.yaml"
-        ),
-    ]))?;
-    run(kubectl(bin).args([
+    // k3s installs its own gateway-api CRDs at server boot; EG's bundled
+    // CRD copies conflict with them (different version sets). Apply the
+    // installer minus CRD documents — the controller runs on the CRDs k3s
+    // already provides.
+    let eg_install = fetch_text(&format!(
+        "https://github.com/envoyproxy/gateway/releases/download/{EG_VERSION}/install.yaml"
+    ))?;
+    write_stdin_manifest(bin, &strip_crd_docs(&eg_install))?;
+    run(kubectl(bin)?.args([
         "-n",
         "envoy-gateway-system",
         "rollout",
@@ -447,16 +589,12 @@ fn install_gateway(bin: &Path) -> anyhow::Result<()> {
         "--timeout=240s",
     ]))?;
     write_stdin_manifest(bin, GATEWAY_MANIFEST)?;
-    run(kubectl(bin).args([
+    run(kubectl(bin)?.args([
         "wait",
         "--for=condition=accepted",
         "gatewayclass/signet-eg",
         "--timeout=120s",
     ]))?;
-    // The gateway-api standard install is deliberately NOT applied: the
-    // Envoy Gateway manifest already installs all the CRDs (server-side),
-    // and re-applying them client-side only produced annotation warnings
-    // and a downgrade risk (see repo gotcha 16).
     Ok(())
 }
 
@@ -464,8 +602,8 @@ fn install_gateway(bin: &Path) -> anyhow::Result<()> {
 /// the repo checkout exists on the machine.
 fn write_stdin_manifest(bin: &Path, manifest: &str) -> anyhow::Result<()> {
     use std::io::Write as _;
-    let mut child = kubectl(bin)
-        .args(["apply", "--server-side", "-f", "-"])
+    let mut child = kubectl(bin)?
+        .args(["apply", "--server-side", "--force-conflicts", "-f", "-"])
         .stdin(std::process::Stdio::piped())
         .spawn()?;
     child
