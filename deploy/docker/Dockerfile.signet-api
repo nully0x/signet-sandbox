@@ -1,6 +1,6 @@
 FROM rust:1.98-slim AS builder
 WORKDIR /build
-COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY Cargo.toml Cargo.lock rust-toolchain.toml versions.toml ./
 COPY crates ./crates
 RUN cargo build --release -p signet-api
 
