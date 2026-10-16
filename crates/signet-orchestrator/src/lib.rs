@@ -176,7 +176,7 @@ pub fn resolve_images(
     tags: &Option<BTreeMap<String, String>>,
 ) -> Result<BTreeMap<String, String>, VersionError> {
     if let Some(tags) = tags {
-        for (_component, tag) in tags {
+        for tag in tags.values() {
             validate_tag(tag)?;
         }
     }
@@ -483,6 +483,10 @@ impl Orchestrator {
                 (
                     "BITCOIN_RPC_COOKIE".to_string(),
                     format!("{}:{}", secrets.rpc_user, secrets.rpc_password),
+                ),
+                (
+                    "LND_WALLET_PASSWORD".to_string(),
+                    secrets.lnd_wallet_password.clone(),
                 ),
                 (
                     "SIGNET_MAGIC".to_string(),
