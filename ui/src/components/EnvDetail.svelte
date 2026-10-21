@@ -112,14 +112,14 @@
 </script>
 
 {#if loading && !bundle}
-  <p class="note blink">loading {envRef} …</p>
+  <p class="note">loading {envRef} …</p>
 {:else if error && !bundle}
   <p class="error-text">{error} <button class="btn" onclick={back}>back</button></p>
 {:else if bundle}
   <header>
     <button class="btn" onclick={back}>← registry</button>
     <h1>{envRef}</h1>
-    <StatusPill status={bundle.status} stamp />
+    <StatusPill status={bundle.status} />
   </header>
 
   <div class="panel actions">

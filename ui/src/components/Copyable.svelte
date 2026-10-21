@@ -63,12 +63,12 @@
     word-break: break-all;
   }
   .value a {
-    color: var(--amber);
+    color: var(--accent);
     text-decoration: none;
-    border-bottom: 1px dotted var(--amber-dim);
+    border-bottom: 1px dotted var(--line-strong);
   }
   .value a:hover {
-    color: var(--amber-bright);
+    color: var(--accent);
   }
   .text-dim {
     color: var(--dim);

@@ -4,6 +4,8 @@
   import EnvList from './components/EnvList.svelte'
   import EnvDetail from './components/EnvDetail.svelte'
 
+  import EnvCreate from './components/EnvCreate.svelte'
+
   let envs = $state<EnvSummary[]>([])
   let loadError = $state('')
   let listVersion = $state(0)
@@ -18,11 +20,18 @@
   let authenticated = $state(fragment !== null || storedToken() !== '')
 
   // Hash routing: `#/` is the list, `#/env/<name-or-id>` the detail view.
+  // Hash routing: `#/` is the registry, `#/new` the draft sheet, and
+  // `#/env/<name-or-id>` the detail view.
   let route = $state(currentRoute())
 
   function currentRoute() {
+    if (location.hash === '#/new') return { view: 'new', ref: '' }
     const match = location.hash.match(/^#\/env\/(.+)$/)
     return match ? { view: 'env', ref: decodeURIComponent(match[1]) } : { view: 'list', ref: '' }
+  }
+
+  function goNew() {
+    location.hash = '#/new'
   }
 
   function openEnv(ref: string) {
@@ -67,14 +76,19 @@
 <div class="frame">
   {#if !authenticated}
     <TokenGate onAuth={unlock} />
+  {:else if route.view === 'new'}
+    <EnvCreate onCreated={openEnv} />
   {:else if route.view === 'env'}
     <EnvDetail envRef={route.ref} back={backToList} />
   {:else}
     <header>
       <p class="mark">signet <span class="sep">/</span> environments</p>
-      <button class="ghost" onclick={() => listVersion++} disabled={loadError !== ''}>
-        refresh
-      </button>
+      <div class="nav">
+        <button class="ghost" onclick={goNew}>new environment</button>
+        <button class="ghost" onclick={() => listVersion++} disabled={loadError !== ''}>
+          refresh
+        </button>
+      </div>
     </header>
     {#if loadError}
       <p class="note error">{loadError}</p>
@@ -104,7 +118,11 @@
     color: var(--dim);
   }
   .mark .sep {
-    color: var(--amber);
+    color: var(--accent);
+  }
+  .nav {
+    display: flex;
+    gap: 0.5rem;
   }
   button.ghost {
     font: inherit;
@@ -133,7 +151,7 @@
     text-transform: uppercase;
   }
   footer code {
-    color: var(--amber);
+    color: var(--accent);
   }
   .note.error {
     color: var(--red);

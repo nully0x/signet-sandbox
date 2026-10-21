@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { api, type Bundle } from '../lib/rpc'
+  import { api } from '../lib/rpc'
 
-  let { onCreated }: { onCreated(bundle: Bundle): void } = $props()
+  let { onCreated }: { onCreated(name: string): void } = $props()
 
   let name = $state('')
   let ttl = $state('20m')
@@ -50,7 +50,7 @@
     submitting = true
     error = ''
     try {
-      const bundle = await api.create({
+      await api.create({
         name: name.trim(),
         ttl_secs: parseTtlSeconds(ttl.trim()),
         components: {
@@ -60,7 +60,7 @@
           lightning: instances.map((n) => ({ name: n, implementation: 'lnd' })),
         },
       })
-      onCreated(bundle)
+      onCreated(name.trim())
     } catch (e) {
       error = e instanceof Error ? e.message : 'create failed'
     } finally {
@@ -85,7 +85,7 @@
   </div>
 
   <div class="field">
-    <label>components</label>
+    <span class="field-label">components</span>
     <label class="check"><input type="checkbox" bind:checked={wantIndexer} disabled={instances.length > 0} /> indexer (electrs)</label>
     <label class="check"><input type="checkbox" bind:checked={faucet} /> faucet</label>
     <label class="check"><input type="checkbox" bind:checked={explorer} /> explorer (mempool)</label>
@@ -153,7 +153,7 @@
     justify-content: space-between;
     align-items: center;
     border: 1px solid var(--line);
-    background: var(--bg-deep);
+    background: var(--panel-deep);
     padding: 0.45rem 0.7rem;
     font-size: 0.8rem;
   }

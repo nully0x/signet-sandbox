@@ -1,55 +1,34 @@
 <script lang="ts">
-  let { status, stamp = false }: { status: string; stamp?: boolean } = $props()
+  let { status }: { status: string } = $props()
 
   const LIVE = ['ready', 'provisioning', 'stopped', 'starting']
   const klass = $derived(LIVE.includes(status) ? status : 'dead')
 </script>
 
-<span class="stamp-ink {klass}" class:stamp>
-  <span class="led"></span>
-  {status}
-</span>
+<span class="pill {klass}">{status}</span>
 
 <style>
-  .stamp-ink {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-family: var(--font-display);
-    font-size: 0.78rem;
-    font-weight: 700;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    padding: 0.16rem 0.6rem 0.1rem;
-    border: 1.5px solid currentcolor;
+  .pill {
+    display: inline-block;
+    font-size: 0.75rem;
+    font-weight: 500;
+    padding: 0.1rem 0.5rem;
     border-radius: var(--radius);
     color: var(--dim);
+    background: var(--hover);
     white-space: nowrap;
-  }
-  .stamp {
-    transform: rotate(-2deg);
-  }
-  .led {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: currentcolor;
   }
   .ready {
     color: var(--green);
+    background: color-mix(in srgb, var(--green) 12%, transparent);
   }
   .provisioning,
   .starting {
-    color: var(--amber);
-  }
-  .provisioning .led,
-  .starting .led {
-    animation: drafting-blink 1.2s ease-in-out infinite;
-  }
-  .stopped {
-    color: var(--dim);
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
   }
   .dead {
     color: var(--red);
+    background: color-mix(in srgb, var(--red) 10%, transparent);
   }
 </style>

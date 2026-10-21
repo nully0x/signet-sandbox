@@ -1,44 +1,28 @@
-/* signet design system — "drafting sheet"
-   A provisioning console styled as an engineering drawing: deep prussian
-   ink, drafting grid, hairline linework, a corner title block, and state
-   rendered as rubber stamps. Tokens first; primitives below. */
+/* signet design system — deliberately plain.
+   Light background, one accent, hairline borders, system type.
+   Monospace is reserved for values people copy. */
 
 :root {
-  /* ink */
-  --bg: #0d1a2b;
-  --bg-deep: #0a1421;
-  --panel: #101f33;
-  --panel-deep: #0d1a2b;
-  --line: #24405f;
-  --line-strong: #3a5c85;
-  --grid: rgba(111, 190, 255, 0.05);
-  --grid-strong: rgba(111, 190, 255, 0.09);
+  --bg: #f5f6f7;
+  --panel: #ffffff;
+  --panel-deep: #fafbfc;
+  --line: #d7dce1;
+  --line-strong: #b8c1c9;
+  --ink: #1a2430;
+  --dim: #5d6b78;
+  --faint: #8b98a5;
+  --hover: #eef2f5;
 
-  /* text */
-  --ink: #dceaf7;
-  --dim: #7d9bbb;
-  --faint: #4e6a8a;
+  --accent: #1f5fd0;
+  --accent-ink: #ffffff;
 
-  /* roles */
-  --accent: #6fc6ff;
-  --accent-deep: #1d4a70;
-  --accent-ink: #06121f;
-  --green: #4fe0a0;
-  --green-deep: #11402e;
-  --amber: #ffc857;
-  --amber-deep: #4a3608;
-  --red: #ff7a70;
-  --red-deep: #4a1512;
-  --hover: #16283f;
+  --green: #15803d;
+  --red: #c02626;
 
-  /* type */
-  --font-data: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
-  --font-display: 'Big Shoulders Display', 'IBM Plex Mono', sans-serif;
-
-  /* measure */
+  --font-data: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  --radius: 4px;
+  --pad-panel: 1rem 1.1rem;
   --sheet-max: 60rem;
-  --radius: 2px;
-  --pad-panel: 1.1rem 1.25rem;
 }
 
 * {
@@ -52,22 +36,17 @@ body {
 }
 
 body {
-  background:
-    linear-gradient(var(--grid-strong) 1px, transparent 1px) 0 0 / 100% 8rem,
-    linear-gradient(90deg, var(--grid-strong) 1px, transparent 1px) 0 0 / 8rem 100%,
-    linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 100% 1rem,
-    linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 1rem 100%,
-    radial-gradient(ellipse 60% 40% at 70% -10%, rgba(111, 198, 255, 0.07), transparent),
-    var(--bg);
+  background: var(--bg);
   color: var(--ink);
-  font-family: var(--font-data);
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   font-size: 0.9rem;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 
 code {
-  font-family: inherit;
+  font-family: var(--font-data);
+  font-size: 0.85em;
 }
 
 a {
@@ -77,129 +56,97 @@ a {
 h1,
 h2,
 h3 {
-  font-family: var(--font-display);
-  font-weight: 600;
-  letter-spacing: 0.04em;
   margin: 0;
+  font-weight: 600;
 }
 
 /* ---------- primitives ---------- */
 
-/* a drawing sheet: the page container */
 .sheet {
   max-width: var(--sheet-max);
   margin: 0 auto;
-  padding: 2rem 1.5rem 4rem;
+  padding: 1.75rem 1.25rem 4rem;
 }
 
-/* a framed panel with drafting corner ticks */
 .panel {
-  position: relative;
   border: 1px solid var(--line);
   background: var(--panel);
+  border-radius: var(--radius);
   padding: var(--pad-panel);
-  margin-bottom: 1.25rem;
-}
-.panel::before,
-.panel::after {
-  content: '';
-  position: absolute;
-  width: 9px;
-  height: 9px;
-  border-color: var(--line-strong);
-  border-style: solid;
-  pointer-events: none;
-}
-.panel::before {
-  top: -1px;
-  left: -1px;
-  border-width: 2px 0 0 2px;
-}
-.panel::after {
-  bottom: -1px;
-  right: -1px;
-  border-width: 0 2px 2px 0;
+  margin-bottom: 1rem;
 }
 
 .panel-title {
-  font-family: var(--font-display);
-  font-size: 0.95rem;
+  font-size: 0.72rem;
   font-weight: 600;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--accent);
-  margin: 0.2rem 0 0.7rem;
+  color: var(--dim);
+  margin: 0.1rem 0 0.7rem;
 }
 
-/* buttons */
 .btn {
-  font-family: var(--font-data);
-  font-size: 0.7rem;
-  font-weight: 500;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  padding: 0.42rem 0.85rem;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.85rem;
   cursor: pointer;
   border: 1px solid var(--line-strong);
-  background: transparent;
+  background: var(--panel);
   color: var(--ink);
   border-radius: var(--radius);
-  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+  transition: background 100ms ease, border-color 100ms ease;
 }
 .btn:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent);
 }
 .btn:disabled {
-  opacity: 0.4;
+  opacity: 0.45;
   cursor: default;
 }
 .btn--primary {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-ink);
-  font-weight: 600;
 }
 .btn--primary:hover:not(:disabled) {
-  background: #8ed4ff;
-  border-color: #8ed4ff;
+  background: #1a51b0;
+  border-color: #1a51b0;
   color: var(--accent-ink);
 }
 .btn--danger {
-  border-color: var(--red);
   color: var(--red);
+  border-color: var(--red);
 }
 .btn--danger:hover:not(:disabled) {
-  background: var(--red-deep);
-  border-color: var(--red);
-  color: var(--red);
+  background: var(--red);
+  color: #fff;
 }
 .btn--danger.confirm {
   background: var(--red);
-  color: #1c0705;
-  font-weight: 600;
+  border-color: var(--red);
+  color: #fff;
 }
 
-/* form fields */
 .field {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.3rem;
   margin-bottom: 0.9rem;
 }
-.field > label {
-  font-size: 0.65rem;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+.field > label,
+.field > .field-label {
+  font-size: 0.78rem;
+  font-weight: 500;
   color: var(--dim);
 }
 .input {
   font: inherit;
-  font-size: 0.85rem;
-  background: var(--bg-deep);
-  border: 1px solid var(--line);
+  font-size: 0.88rem;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
   color: var(--ink);
-  padding: 0.55rem 0.7rem;
+  padding: 0.5rem 0.65rem;
   border-radius: var(--radius);
   outline: none;
   width: 100%;
@@ -211,39 +158,14 @@ h3 {
   color: var(--faint);
 }
 .hint {
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   color: var(--dim);
 }
 .error-text {
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   color: var(--red);
 }
-
-/* state stamps */
-.stamp {
-  display: inline-block;
-  font-family: var(--font-display);
-  font-size: 0.8rem;
-  font-weight: 700;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  padding: 0.18rem 0.6rem 0.14rem;
-  border: 1.5px solid currentcolor;
-  border-radius: var(--radius);
-  transform: rotate(-2deg);
-}
-
-/* dim annotation text */
 .note {
   color: var(--dim);
-  font-size: 0.78rem;
-}
-
-/* blinking annotation for in-flight states */
-@keyframes drafting-blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
-}
-.blink {
-  animation: drafting-blink 1.2s ease-in-out infinite;
+  font-size: 0.8rem;
 }
