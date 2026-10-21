@@ -90,7 +90,24 @@ export interface Bundle {
   expires_at: string | null
 }
 
+export interface CreateRequest {
+  name: string
+  ttl_secs: number | null
+  components: {
+    explorer: boolean
+    indexer: boolean
+    faucet: boolean
+    lightning: { name: string; implementation: string }[]
+  }
+}
+
 export const api = {
   list: () => call<EnvSummary[]>('environment.list'),
   get: (id: string) => call<Bundle>('environment.get', { id }),
+  create: (params: CreateRequest) => call<Bundle>('environment.create', params),
+  stop: (id: string) => call<unknown>('environment.stop', { id }),
+  start: (id: string) => call<unknown>('environment.start', { id }),
+  destroy: (id: string) => call<{ destroyed: boolean }>('environment.destroy', { id }),
+  fund: (id: string, address: string, amount_sat: number) =>
+    call<{ txid: string }>('environment.faucet', { id, address, amount_sat }),
 }

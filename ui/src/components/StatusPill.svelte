@@ -1,64 +1,55 @@
 <script lang="ts">
-  let { status } = $props()
+  let { status, stamp = false }: { status: string; stamp?: boolean } = $props()
 
   const LIVE = ['ready', 'provisioning', 'stopped', 'starting']
-  const klass = $derived(
-    LIVE.includes(status) ? status : 'dead',
-  )
+  const klass = $derived(LIVE.includes(status) ? status : 'dead')
 </script>
 
-<span class="pill {klass}">
+<span class="stamp-ink {klass}" class:stamp>
   <span class="led"></span>
   {status}
 </span>
 
 <style>
-  .pill {
+  .stamp-ink {
     display: inline-flex;
     align-items: center;
-    gap: 0.45rem;
-    font-size: 0.65rem;
-    letter-spacing: 0.14em;
+    gap: 0.5rem;
+    font-family: var(--font-display);
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.2em;
     text-transform: uppercase;
-    padding: 0.2rem 0.6rem;
-    border: 1px solid var(--line);
+    padding: 0.16rem 0.6rem 0.1rem;
+    border: 1.5px solid currentcolor;
+    border-radius: var(--radius);
     color: var(--dim);
+    white-space: nowrap;
+  }
+  .stamp {
+    transform: rotate(-2deg);
   }
   .led {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: var(--dim);
-  }
-  .ready .led {
-    background: var(--green);
-    box-shadow: 0 0 6px var(--green);
+    background: currentcolor;
   }
   .ready {
     color: var(--green);
-    border-color: color-mix(in srgb, var(--green) 35%, transparent);
-  }
-  .provisioning .led,
-  .starting .led {
-    background: var(--amber);
-    animation: blink 1.1s ease-in-out infinite;
   }
   .provisioning,
   .starting {
     color: var(--amber);
-    border-color: color-mix(in srgb, var(--amber) 35%, transparent);
   }
-  .stopped .led {
-    background: var(--dim);
+  .provisioning .led,
+  .starting .led {
+    animation: drafting-blink 1.2s ease-in-out infinite;
   }
-  .dead .led {
-    background: var(--red);
+  .stopped {
+    color: var(--dim);
   }
   .dead {
-    color: var(--red-dim);
-  }
-  @keyframes blink {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.25; }
+    color: var(--red);
   }
 </style>

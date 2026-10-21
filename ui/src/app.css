@@ -1,20 +1,44 @@
-:root {
-  --bg: #0c0d0a;
-  --panel: #121410;
-  --panel-deep: #0e100c;
-  --line: #262922;
-  --ink: #e9e7de;
-  --dim: #8b8a7a;
-  --amber: #f7931a;
-  --amber-bright: #ffb44d;
-  --amber-dim: #7a4d13;
-  --green: #5bd47c;
-  --red: #e5484d;
-  --red-dim: #a34548;
-  --hover: #181a14;
+/* signet design system — "drafting sheet"
+   A provisioning console styled as an engineering drawing: deep prussian
+   ink, drafting grid, hairline linework, a corner title block, and state
+   rendered as rubber stamps. Tokens first; primitives below. */
 
-  font-family: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
-  color-scheme: dark;
+:root {
+  /* ink */
+  --bg: #0d1a2b;
+  --bg-deep: #0a1421;
+  --panel: #101f33;
+  --panel-deep: #0d1a2b;
+  --line: #24405f;
+  --line-strong: #3a5c85;
+  --grid: rgba(111, 190, 255, 0.05);
+  --grid-strong: rgba(111, 190, 255, 0.09);
+
+  /* text */
+  --ink: #dceaf7;
+  --dim: #7d9bbb;
+  --faint: #4e6a8a;
+
+  /* roles */
+  --accent: #6fc6ff;
+  --accent-deep: #1d4a70;
+  --accent-ink: #06121f;
+  --green: #4fe0a0;
+  --green-deep: #11402e;
+  --amber: #ffc857;
+  --amber-deep: #4a3608;
+  --red: #ff7a70;
+  --red-deep: #4a1512;
+  --hover: #16283f;
+
+  /* type */
+  --font-data: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  --font-display: 'Big Shoulders Display', 'IBM Plex Mono', sans-serif;
+
+  /* measure */
+  --sheet-max: 60rem;
+  --radius: 2px;
+  --pad-panel: 1.1rem 1.25rem;
 }
 
 * {
@@ -29,12 +53,16 @@ body {
 
 body {
   background:
-    radial-gradient(circle at 18% -10%, rgba(247, 147, 26, 0.06), transparent 42%),
-    radial-gradient(circle, #161811 1px, transparent 1px) 0 0 / 26px 26px,
+    linear-gradient(var(--grid-strong) 1px, transparent 1px) 0 0 / 100% 8rem,
+    linear-gradient(90deg, var(--grid-strong) 1px, transparent 1px) 0 0 / 8rem 100%,
+    linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 100% 1rem,
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 1rem 100%,
+    radial-gradient(ellipse 60% 40% at 70% -10%, rgba(111, 198, 255, 0.07), transparent),
     var(--bg);
   color: var(--ink);
+  font-family: var(--font-data);
   font-size: 0.9rem;
-  line-height: 1.45;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -43,5 +71,179 @@ code {
 }
 
 a {
-  color: var(--amber);
+  color: var(--accent);
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin: 0;
+}
+
+/* ---------- primitives ---------- */
+
+/* a drawing sheet: the page container */
+.sheet {
+  max-width: var(--sheet-max);
+  margin: 0 auto;
+  padding: 2rem 1.5rem 4rem;
+}
+
+/* a framed panel with drafting corner ticks */
+.panel {
+  position: relative;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  padding: var(--pad-panel);
+  margin-bottom: 1.25rem;
+}
+.panel::before,
+.panel::after {
+  content: '';
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border-color: var(--line-strong);
+  border-style: solid;
+  pointer-events: none;
+}
+.panel::before {
+  top: -1px;
+  left: -1px;
+  border-width: 2px 0 0 2px;
+}
+.panel::after {
+  bottom: -1px;
+  right: -1px;
+  border-width: 0 2px 2px 0;
+}
+
+.panel-title {
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0.2rem 0 0.7rem;
+}
+
+/* buttons */
+.btn {
+  font-family: var(--font-data);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 0.42rem 0.85rem;
+  cursor: pointer;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink);
+  border-radius: var(--radius);
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+.btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.btn--primary:hover:not(:disabled) {
+  background: #8ed4ff;
+  border-color: #8ed4ff;
+  color: var(--accent-ink);
+}
+.btn--danger {
+  border-color: var(--red);
+  color: var(--red);
+}
+.btn--danger:hover:not(:disabled) {
+  background: var(--red-deep);
+  border-color: var(--red);
+  color: var(--red);
+}
+.btn--danger.confirm {
+  background: var(--red);
+  color: #1c0705;
+  font-weight: 600;
+}
+
+/* form fields */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 0.9rem;
+}
+.field > label {
+  font-size: 0.65rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.input {
+  font: inherit;
+  font-size: 0.85rem;
+  background: var(--bg-deep);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  padding: 0.55rem 0.7rem;
+  border-radius: var(--radius);
+  outline: none;
+  width: 100%;
+}
+.input:focus {
+  border-color: var(--accent);
+}
+.input::placeholder {
+  color: var(--faint);
+}
+.hint {
+  font-size: 0.7rem;
+  color: var(--dim);
+}
+.error-text {
+  font-size: 0.75rem;
+  color: var(--red);
+}
+
+/* state stamps */
+.stamp {
+  display: inline-block;
+  font-family: var(--font-display);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  padding: 0.18rem 0.6rem 0.14rem;
+  border: 1.5px solid currentcolor;
+  border-radius: var(--radius);
+  transform: rotate(-2deg);
+}
+
+/* dim annotation text */
+.note {
+  color: var(--dim);
+  font-size: 0.78rem;
+}
+
+/* blinking annotation for in-flight states */
+@keyframes drafting-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.blink {
+  animation: drafting-blink 1.2s ease-in-out infinite;
 }

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, saveToken, RpcError, UNAUTHENTICATED } from '../lib/rpc'
+  import { saveToken, api, RpcError, UNAUTHENTICATED } from '../lib/rpc'
 
   let { onAuth }: { onAuth(): void } = $props()
 
@@ -32,24 +32,20 @@
 </script>
 
 <div class="gate">
-  <form onsubmit={submit}>
-    <p class="mark">signet</p>
-    <h1>dashboard</h1>
+  <form onsubmit={submit} class="panel">
+    <p class="wordmark">signet sandbox</p>
+    <h1 class="title">access</h1>
     <p class="hint">
       paste an api token. in local mode the profile token lives in
       <code>~/.signet/config.toml</code>.
     </p>
-    <input
-      type="password"
-      placeholder="sgn_..."
-      bind:value
-      autocomplete="off"
-      spellcheck="false"
-    />
+    <input class="input" type="password" placeholder="sgn_..." bind:value autocomplete="off" spellcheck="false" />
     {#if error}
-      <p class="error">{error}</p>
+      <p class="error-text">{error}</p>
     {/if}
-    <button type="submit" disabled={checking}>{checking ? 'checking…' : 'unlock'}</button>
+    <button class="btn btn--primary" type="submit" disabled={checking}>
+      {checking ? 'checking…' : 'unlock'}
+    </button>
   </form>
 </div>
 
@@ -61,62 +57,29 @@
   }
   form {
     width: min(26rem, 90vw);
-    border: 1px solid var(--line);
-    background: var(--panel);
-    padding: 2rem;
     display: flex;
     flex-direction: column;
     gap: 0.9rem;
     animation: rise 400ms ease both;
   }
-  .mark {
-    color: var(--amber);
+  .wordmark {
+    color: var(--dim);
     font-size: 0.65rem;
-    letter-spacing: 0.4em;
+    letter-spacing: 0.42em;
     text-transform: uppercase;
+    margin: 0;
   }
-  h1 {
-    font-size: 1.4rem;
-    font-weight: 600;
-    letter-spacing: 0.06em;
+  .title {
+    font-size: 2rem;
+    line-height: 1;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
   }
   .hint {
     color: var(--dim);
     font-size: 0.75rem;
     line-height: 1.5;
-  }
-  code {
-    color: var(--ink);
-  }
-  input {
-    background: var(--bg);
-    border: 1px solid var(--line);
-    color: var(--ink);
-    font: inherit;
-    padding: 0.6rem 0.75rem;
-    outline: none;
-  }
-  input:focus {
-    border-color: var(--amber-dim);
-  }
-  button {
-    font: inherit;
-    background: var(--amber);
-    color: #141005;
-    border: none;
-    padding: 0.6rem;
-    cursor: pointer;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    font-size: 0.75rem;
-  }
-  button:hover {
-    background: var(--amber-bright);
-  }
-  .error {
-    color: var(--red);
-    font-size: 0.75rem;
+    margin: 0;
   }
   @keyframes rise {
     from { transform: translateY(12px); opacity: 0; }

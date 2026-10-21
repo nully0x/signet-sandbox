@@ -44,9 +44,8 @@ spec:
               set -e
               lnd \
                 --noseedbackup \
-                --signet \
-                --bitcoin.active \
-                --bitcoin.node=bitcoindrpc \
+                --bitcoin.signet \
+                --bitcoin.node=bitcoind \
                 --bitcoind.rpchost=bitcoind:38332 \
                 --bitcoind.rpcuser=$BITCOIN_RPC_USER \
                 --bitcoind.rpcpass=$BITCOIN_RPC_PASSWORD \

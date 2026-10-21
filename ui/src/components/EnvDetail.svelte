@@ -9,6 +9,24 @@
   let error = $state('')
   let loading = $state(false)
 
+  let actionBusy = $state(false)
+  let confirmName = $state('')
+  let confirmingDestroy = $state(false)
+
+  let fundAddress = $state('')
+  let fundAmount = $state<number | null>(null)
+  let fundBusy = $state(false)
+  let fundError = $state('')
+  let fundTxid = $state('')
+
+  const canStop = $derived(bundle?.status === 'ready')
+  const canStart = $derived(bundle?.status === 'stopped')
+  const canDestroy = $derived(
+    bundle !== null && !['destroyed', 'expired'].includes(bundle.status),
+  )
+  const destroyArmed = $derived(confirmingDestroy && confirmName === envRef)
+  const hasFaucet = $derived(bundle?.faucet_url !== null && bundle?.faucet_url !== undefined)
+
   async function load() {
     loading = true
     error = ''
@@ -25,27 +43,113 @@
     }
   }
 
+  // Drafting-table behaviour: while the machine works, the sheet redraws
+  // itself — poll until the environment settles.
   $effect(() => {
     bundle = null
     load()
+    return () => clearInterval(pollTimer)
   })
+
+  let pollTimer: ReturnType<typeof setInterval> | undefined = $state()
+  $effect(() => {
+    const status = bundle?.status
+    clearInterval(pollTimer)
+    if (status === 'provisioning' || status === 'starting') {
+      pollTimer = setInterval(load, 3000)
+      return () => clearInterval(pollTimer)
+    }
+  })
+
+  async function lifecycle(kind: 'stop' | 'start' | 'destroy') {
+    if (actionBusy || !bundle) return
+    actionBusy = true
+    error = ''
+    try {
+      if (kind === 'stop') await api.stop(envRef)
+      else if (kind === 'start') await api.start(envRef)
+      else {
+        await api.destroy(envRef)
+        back()
+        return
+      }
+      await load()
+    } catch (e) {
+      if (e instanceof RpcError && e.code === UNAUTHENTICATED) {
+        back()
+        return
+      }
+      error = e instanceof Error ? e.message : `${kind} failed`
+    } finally {
+      actionBusy = false
+    }
+  }
+
+  function toggleConfirmDestroy() {
+    confirmingDestroy = !confirmingDestroy
+    confirmName = ''
+  }
+
+  async function fund(event: SubmitEvent) {
+    event.preventDefault()
+    if (fundBusy || !fundAddress || !fundAmount || fundAmount <= 0) return
+    fundBusy = true
+    fundError = ''
+    fundTxid = ''
+    try {
+      const result = await api.fund(envRef, fundAddress.trim(), fundAmount)
+      fundTxid = result.txid
+      fundAddress = ''
+      fundAmount = null
+    } catch (e) {
+      fundError = e instanceof Error ? e.message : 'faucet failed'
+    } finally {
+      fundBusy = false
+    }
+  }
 
   const instances = $derived(Object.entries(bundle?.lightning ?? {}))
 </script>
 
 {#if loading && !bundle}
-  <p class="note pulse">loading {envRef} …</p>
-{:else if error}
-  <p class="note error">{error} <button class="ghost" onclick={back}>back</button></p>
+  <p class="note blink">loading {envRef} …</p>
+{:else if error && !bundle}
+  <p class="error-text">{error} <button class="btn" onclick={back}>back</button></p>
 {:else if bundle}
   <header>
-    <button class="ghost" onclick={back}>← environments</button>
+    <button class="btn" onclick={back}>← registry</button>
     <h1>{envRef}</h1>
-    <StatusPill status={bundle.status} />
+    <StatusPill status={bundle.status} stamp />
   </header>
 
-  <section>
-    <h2>endpoints</h2>
+  <div class="panel actions">
+    <button class="btn" onclick={() => lifecycle('stop')} disabled={!canStop || actionBusy}>stop</button>
+    <button class="btn" onclick={() => lifecycle('start')} disabled={!canStart || actionBusy}>start</button>
+    {#if canDestroy}
+      <button class="btn btn--danger" onclick={toggleConfirmDestroy} disabled={actionBusy}>
+        {confirmingDestroy ? 'cancel' : 'destroy'}
+      </button>
+    {/if}
+    {#if confirmingDestroy && canDestroy}
+      <span class="confirm-cluster">
+        <span class="note">type “{envRef}” to confirm destruction</span>
+        <input class="input confirm-input" bind:value={confirmName} placeholder={envRef} spellcheck="false" />
+        <button
+          class="btn btn--danger confirm"
+          onclick={() => lifecycle('destroy')}
+          disabled={!destroyArmed || actionBusy}
+        >
+          confirm destroy
+        </button>
+      </span>
+    {/if}
+    {#if error}
+      <span class="error-text">{error}</span>
+    {/if}
+  </div>
+
+  <section class="panel">
+    <h2 class="panel-title">endpoints</h2>
     <Copyable label="rpc url" value={bundle.rpc_url} />
     {#if bundle.rpc_auth}
       <Copyable label="rpc auth" value={bundle.rpc_auth} secret />
@@ -61,8 +165,33 @@
     {/if}
   </section>
 
-  <section>
-    <h2>chain</h2>
+  {#if hasFaucet && bundle.status === 'ready'}
+    <form class="panel" onsubmit={fund}>
+      <h2 class="panel-title">faucet — mint signet coin</h2>
+      <div class="fund-grid">
+        <label class="field">
+          <span>address</span>
+          <input class="input" bind:value={fundAddress} placeholder="sb1q…" spellcheck="false" />
+        </label>
+        <label class="field">
+          <span>amount (sats)</span>
+          <input class="input" type="number" min="1" bind:value={fundAmount} placeholder="1000000" />
+        </label>
+        <button class="btn btn--primary" type="submit" disabled={fundBusy || !fundAddress || !fundAmount}>
+          {fundBusy ? 'minting…' : 'fund'}
+        </button>
+      </div>
+      {#if fundError}
+        <p class="error-text">{fundError}</p>
+      {/if}
+      {#if fundTxid}
+        <Copyable label="txid" value={fundTxid} />
+      {/if}
+    </form>
+  {/if}
+
+  <section class="panel">
+    <h2 class="panel-title">chain</h2>
     <Copyable label="challenge" value={bundle.signet_challenge} />
     <Copyable label="block policy" value={bundle.block_policy} />
     {#if bundle.expires_at}
@@ -71,18 +200,18 @@
   </section>
 
   {#if bundle.versions}
-    <section>
-      <h2>versions</h2>
+    <section class="panel">
+      <h2 class="panel-title">versions</h2>
       {#each Object.entries(bundle.versions) as [component, tag] (component)}
         <Copyable label={component} value={tag} />
       {/each}
     </section>
   {/if}
 
-  <section>
-    <h2>lightning</h2>
+  <section class="panel">
+    <h2 class="panel-title">lightning</h2>
     {#if instances.length === 0}
-      <p class="note dim-note">no lightning instances — add one with <code>environment.update</code></p>
+      <p class="note">no lightning instances on this sheet — add one with <code>environment.update</code></p>
     {/if}
     {#each instances as [name, ln] (name)}
       <div class="instance">
@@ -100,76 +229,61 @@
     display: flex;
     align-items: center;
     gap: 1rem;
-    margin-bottom: 1.4rem;
-  }
-  h1 {
-    font-size: 1.2rem;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    margin-right: auto;
-  }
-  section {
-    border: 1px solid var(--line);
-    background: var(--panel);
-    padding: 0.4rem 1rem 0.7rem;
     margin-bottom: 1.2rem;
   }
-  h2 {
-    color: var(--dim);
-    font-size: 0.65rem;
-    letter-spacing: 0.16em;
+  h1 {
+    font-size: 1.5rem;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
-    margin: 0.6rem 0 0.4rem;
+    margin-right: auto;
+  }
+  .actions {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .confirm-cluster {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+    flex-wrap: wrap;
+    border-left: 1px solid var(--line-strong);
+    padding-left: 0.9rem;
+  }
+  .confirm-input {
+    width: 12rem;
+  }
+  .fund-grid {
+    display: grid;
+    grid-template-columns: 1fr 10rem auto;
+    gap: 0.9rem;
+    align-items: end;
+  }
+  .fund-grid .field {
+    margin-bottom: 0;
   }
   .instance {
     border: 1px solid var(--line);
+    background: var(--panel-deep);
     padding: 0.4rem 1rem 0.7rem;
     margin: 0.6rem 0;
   }
   h3 {
-    font-size: 0.85rem;
-    font-weight: 600;
+    font-size: 1rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
     margin: 0.6rem 0 0.3rem;
     display: flex;
     gap: 0.6rem;
     align-items: baseline;
   }
   .impl {
-    color: var(--amber);
+    color: var(--accent);
     font-size: 0.65rem;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
+    letter-spacing: 0.16em;
   }
-  .note {
-    color: var(--dim);
-    font-size: 0.8rem;
-  }
-  .dim-note code {
-    color: var(--amber);
-  }
-  .error {
-    color: var(--red);
-  }
-  .pulse {
-    animation: blink 1.1s ease-in-out infinite;
-  }
-  button.ghost {
-    font: inherit;
-    background: none;
-    border: 1px solid var(--line);
-    color: var(--dim);
-    padding: 0.25rem 0.6rem;
-    cursor: pointer;
-    font-size: 0.7rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-  button.ghost:hover {
-    color: var(--ink);
-    border-color: var(--dim);
-  }
-  @keyframes blink {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.35; }
+  .note code {
+    color: var(--accent);
   }
 </style>
