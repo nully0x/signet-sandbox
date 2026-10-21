@@ -1,89 +1,125 @@
-<script>
-  import svelteLogo from './assets/svelte.svg'
-  import viteLogo from './assets/vite.svg'
-  import heroImg from './assets/hero.png'
-  import Counter from './lib/Counter.svelte'
+<script lang="ts">
+  import { api, storedToken, type EnvSummary } from './lib/rpc'
+  import TokenGate from './components/TokenGate.svelte'
+  import EnvList from './components/EnvList.svelte'
+  import EnvDetail from './components/EnvDetail.svelte'
+
+  let envs = $state<EnvSummary[]>([])
+  let loadError = $state('')
+  let listVersion = $state(0)
+
+  // Hash routing: `#/` is the list, `#/env/<name-or-id>` the detail view.
+  let route = $state(currentRoute())
+
+  function currentRoute() {
+    const match = location.hash.match(/^#\/env\/(.+)$/)
+    return match ? { view: 'env', ref: decodeURIComponent(match[1]) } : { view: 'list', ref: '' }
+  }
+
+  function openEnv(ref: string) {
+    location.hash = `#/env/${encodeURIComponent(ref)}`
+  }
+
+  function backToList() {
+    location.hash = '#/'
+  }
+
+  window.addEventListener('hashchange', () => {
+    route = currentRoute()
+  })
+
+  let authenticated = $derived(storedToken().length > 0)
+
+  async function refresh() {
+    try {
+      envs = await api.list()
+      loadError = ''
+    } catch {
+      loadError = 'api unreachable'
+    }
+  }
+
+  $effect(() => {
+    if (authenticated && route.view === 'list') {
+      void listVersion
+      refresh()
+    }
+  })
 </script>
 
-<section id="center">
-  <div class="hero">
-    <img src={heroImg} class="base" width="170" height="179" alt="" />
-    <img src={svelteLogo} class="framework" alt="Svelte logo" />
-    <img src={viteLogo} class="vite" alt="Vite logo" />
-  </div>
-  <div>
-    <h1>Get started</h1>
-    <p>Edit <code>src/App.svelte</code> and save to test <code>HMR</code></p>
-  </div>
-  <Counter />
-</section>
+<div class="frame">
+  {#if !authenticated}
+    <TokenGate />
+  {:else if route.view === 'env'}
+    <EnvDetail envRef={route.ref} back={backToList} />
+  {:else}
+    <header>
+      <p class="mark">signet <span class="sep">/</span> environments</p>
+      <button class="ghost" onclick={() => listVersion++} disabled={loadError !== ''}>
+        refresh
+      </button>
+    </header>
+    {#if loadError}
+      <p class="note error">{loadError}</p>
+    {:else}
+      <EnvList envs={envs} open={openEnv} />
+    {/if}
+    <footer>rpc surface <code>/api/rpc</code></footer>
+  {/if}
+</div>
 
-<div class="ticks"></div>
-
-<section id="next-steps">
-  <div id="docs">
-    <svg class="icon" role="presentation" aria-hidden="true">
-      <use href="/icons.svg#documentation-icon"></use>
-    </svg>
-    <h2>Documentation</h2>
-    <p>Your questions, answered</p>
-    <ul>
-      <li>
-        <a href="https://vite.dev/" target="_blank" rel="noreferrer">
-          <img class="logo" src={viteLogo} alt="" />
-          Explore Vite
-        </a>
-      </li>
-      <li>
-        <a href="https://svelte.dev/" target="_blank" rel="noreferrer">
-          <img class="button-icon" src={svelteLogo} alt="" />
-          Learn more
-        </a>
-      </li>
-    </ul>
-  </div>
-  <div id="social">
-    <svg class="icon" role="presentation" aria-hidden="true">
-      <use href="/icons.svg#social-icon"></use>
-    </svg>
-    <h2>Connect with us</h2>
-    <p>Join the Vite community</p>
-    <ul>
-      <li>
-        <a href="https://github.com/vitejs/vite" target="_blank" rel="noreferrer">
-          <svg class="button-icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#github-icon"></use>
-          </svg>
-          GitHub
-        </a>
-      </li>
-      <li>
-        <a href="https://chat.vite.dev/" target="_blank" rel="noreferrer">
-          <svg class="button-icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#discord-icon"></use>
-          </svg>
-          Discord
-        </a>
-      </li>
-      <li>
-        <a href="https://x.com/vite_js" target="_blank" rel="noreferrer">
-          <svg class="button-icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#x-icon"></use>
-          </svg>
-          X.com
-        </a>
-      </li>
-      <li>
-        <a href="https://bsky.app/profile/vite.dev" target="_blank" rel="noreferrer">
-          <svg class="button-icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#bluesky-icon"></use>
-          </svg>
-          Bluesky
-        </a>
-      </li>
-    </ul>
-  </div>
-</section>
-
-<div class="ticks"></div>
-<section id="spacer"></section>
+<style>
+  .frame {
+    max-width: 56rem;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 4rem;
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 1.2rem;
+  }
+  .mark {
+    font-size: 0.7rem;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+  .mark .sep {
+    color: var(--amber);
+  }
+  button.ghost {
+    font: inherit;
+    background: none;
+    border: 1px solid var(--line);
+    color: var(--dim);
+    padding: 0.3rem 0.7rem;
+    cursor: pointer;
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  button.ghost:hover:not(:disabled) {
+    color: var(--ink);
+    border-color: var(--dim);
+  }
+  button.ghost:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+  footer {
+    margin-top: 1.4rem;
+    color: var(--dim);
+    font-size: 0.65rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+  footer code {
+    color: var(--amber);
+  }
+  .note.error {
+    color: var(--red);
+    font-size: 0.8rem;
+  }
+</style>
