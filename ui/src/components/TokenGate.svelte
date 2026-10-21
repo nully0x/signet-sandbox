@@ -1,30 +1,32 @@
 <script lang="ts">
-  import { saveToken, tokenFromFragment, storedToken, api, clearToken, RpcError, UNAUTHENTICATED } from '../lib/rpc'
+  import { api, saveToken, RpcError, UNAUTHENTICATED } from '../lib/rpc'
 
-  let value = $state(tokenFromFragment() ?? '')
+  let { onAuth }: { onAuth(): void } = $props()
+
+  let value = $state('')
   let error = $state('')
-
-  if (tokenFromFragment()) {
-    saveToken(tokenFromFragment()!)
-    // Drop the secret from the address bar once it is stored.
-    history.replaceState(null, '', location.pathname + location.search)
-  }
+  let checking = $state(false)
 
   async function submit(event: SubmitEvent) {
     event.preventDefault()
     const token = value.trim()
-    if (!token) return
+    if (!token || checking) return
+    checking = true
+    error = ''
     saveToken(token)
     try {
+      // Validate before unlocking: a rejected token never reaches the
+      // dashboard shell.
       await api.list()
-      error = ''
+      onAuth()
     } catch (e) {
       if (e instanceof RpcError && e.code === UNAUTHENTICATED) {
-        clearToken()
         error = 'token rejected by the api'
       } else {
         error = e instanceof Error ? e.message : 'request failed'
       }
+    } finally {
+      checking = false
     }
   }
 </script>
@@ -47,12 +49,7 @@
     {#if error}
       <p class="error">{error}</p>
     {/if}
-    <button type="submit">unlock</button>
-    {#if storedToken()}
-      <button type="button" class="ghost" onclick={() => { clearToken(); value = '' }}>
-        forget stored token
-      </button>
-    {/if}
+    <button type="submit" disabled={checking}>{checking ? 'checking…' : 'unlock'}</button>
   </form>
 </div>
 
@@ -116,15 +113,6 @@
   }
   button:hover {
     background: var(--amber-bright);
-  }
-  button.ghost {
-    background: none;
-    border: 1px solid var(--line);
-    color: var(--dim);
-  }
-  button.ghost:hover {
-    color: var(--ink);
-    border-color: var(--dim);
   }
   .error {
     color: var(--red);

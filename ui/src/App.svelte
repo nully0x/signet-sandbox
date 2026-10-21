@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, storedToken, type EnvSummary } from './lib/rpc'
+  import { api, clearToken, storedToken, tokenFromFragment, type EnvSummary, RpcError, UNAUTHENTICATED } from './lib/rpc'
   import TokenGate from './components/TokenGate.svelte'
   import EnvList from './components/EnvList.svelte'
   import EnvDetail from './components/EnvDetail.svelte'
@@ -7,6 +7,15 @@
   let envs = $state<EnvSummary[]>([])
   let loadError = $state('')
   let listVersion = $state(0)
+
+  // A `#token=` fragment (from `signet up --ui`) wins over a stored
+  // token and is stripped from the address bar once stored.
+  const fragment = tokenFromFragment()
+  if (fragment) {
+    localStorage.setItem('signet.token', fragment)
+    history.replaceState(null, '', location.pathname + location.search)
+  }
+  let authenticated = $state(fragment !== null || storedToken() !== '')
 
   // Hash routing: `#/` is the list, `#/env/<name-or-id>` the detail view.
   let route = $state(currentRoute())
@@ -28,15 +37,23 @@
     route = currentRoute()
   })
 
-  let authenticated = $derived(storedToken().length > 0)
-
   async function refresh() {
     try {
       envs = await api.list()
       loadError = ''
-    } catch {
+    } catch (e) {
+      if (e instanceof RpcError && e.code === UNAUTHENTICATED) {
+        clearToken()
+        authenticated = false
+        return
+      }
       loadError = 'api unreachable'
     }
+  }
+
+  function unlock() {
+    authenticated = true
+    listVersion++
   }
 
   $effect(() => {
@@ -49,7 +66,7 @@
 
 <div class="frame">
   {#if !authenticated}
-    <TokenGate />
+    <TokenGate onAuth={unlock} />
   {:else if route.view === 'env'}
     <EnvDetail envRef={route.ref} back={backToList} />
   {:else}

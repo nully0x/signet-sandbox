@@ -82,6 +82,9 @@ enum Command {
         /// Seconds between readiness polls
         #[arg(long, default_value_t = 2)]
         poll_secs: u64,
+        /// Open the dashboard in a browser once the environment is ready
+        #[arg(long)]
+        ui: bool,
         #[command(flatten)]
         common: Common,
     },
@@ -187,8 +190,9 @@ fn run(command: Command) -> u8 {
             ttl,
             timeout_secs,
             poll_secs,
+            ui,
             common,
-        } => up(config, name, ttl, timeout_secs, poll_secs, &common),
+        } => up(config, name, ttl, timeout_secs, poll_secs, ui, &common),
         Command::Get { env, common } => get(&env, &common),
         Command::Ls { common } => ls(&common),
         Command::Stop { env, common } => lifecycle("environment.stop", &env, &common),
@@ -259,10 +263,14 @@ fn up(
     ttl: Option<String>,
     timeout_secs: u64,
     poll_secs: u64,
+    ui: bool,
     common: &Common,
 ) -> Result<(), CliError> {
     ensure_local_api(common)?;
-    let client = client(common)?;
+    let client = match heal_stale_token(common)? {
+        Some(client) => client,
+        None => client(common)?,
+    };
     // Project convention: a sandbox.json in the working directory is the
     // default config when no --config or --name is given.
     let cfg = match &config_path {
@@ -313,7 +321,86 @@ fn up(
     } else {
         output::print_bundle_human(&bundle);
     }
+    if ui {
+        open_dashboard(common)?;
+    }
     Ok(())
+}
+
+/// A stored bearer token does not survive database recreates: the
+/// profile's `token` field may predate the api currently running. When
+/// the credentials are bearer-based (explicit or profile fallback) and
+/// an nsec is available, probe once and heal a rejected token by
+/// re-minting against the live api. Explicit `--nsec` callers sign per
+/// request and cannot go stale.
+fn heal_stale_token(common: &Common) -> Result<Option<Client>, CliError> {
+    if common.token.is_some() || common.nsec.is_some() {
+        return Ok(None);
+    }
+    let profile = match crate::profile::load() {
+        Ok(profile) => profile,
+        Err(_) => return Ok(None),
+    };
+    if profile.nsec.is_empty() {
+        return Ok(None);
+    }
+    let probe = Client::new(&common.api, auth::Auth::Bearer(profile.token.clone()))?;
+    match probe.call("environment.list", json!({})) {
+        Ok(_) => Ok(None),
+        Err(CallError::Rpc(e)) if e.code == signet_rpc::error::UNAUTHENTICATED => {
+            eprintln!("profile token rejected — minting a fresh one");
+            let token = mint_token(&common.api, &profile.nsec)?;
+            let _ = crate::profile::refresh_token(&token);
+            Ok(Some(Client::new(&common.api, auth::Auth::Bearer(token))?))
+        }
+        Err(_) => Ok(None),
+    }
+}
+
+/// Hand the browser a token valid for the api being talked to: an
+/// explicit `--token` is reused as-is, otherwise the profile token (just
+/// healed by the pre-flight probe, or minted on the spot) is used.
+fn open_dashboard(common: &Common) -> Result<(), CliError> {
+    let token = match common.token.clone() {
+        Some(token) => token,
+        None => match crate::profile::load() {
+            Ok(profile) if !profile.token.is_empty() => profile.token,
+            _ => {
+                let key = common
+                    .nsec
+                    .clone()
+                    .or_else(|| crate::profile::load().ok().map(|p| p.nsec))
+                    .ok_or_else(|| anyhow::anyhow!("no credentials to hand to the dashboard"))?;
+                mint_token(&common.api, &key)?
+            }
+        },
+    };
+    let url = format!("{}/#token={token}", common.api);
+    if open_browser(&url) {
+        eprintln!("dashboard opened");
+    } else {
+        eprintln!("open the dashboard: {url}");
+    }
+    Ok(())
+}
+
+fn open_browser(url: &str) -> bool {
+    use std::process::{Command, Stdio};
+    let spawn = |program: &str, args: &[&str]| {
+        Command::new(program)
+            .args(args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .is_ok()
+    };
+    if cfg!(target_os = "macos") {
+        spawn("open", &[url])
+    } else if cfg!(target_os = "windows") {
+        spawn("cmd", &["/C", "start", "", url])
+    } else {
+        spawn("xdg-open", &[url])
+    }
 }
 
 fn get(env: &str, common: &Common) -> Result<(), CliError> {
@@ -495,7 +582,7 @@ mod tests {
             nsec: None,
             json: false,
         };
-        let result = up(None, Some("cli-test".into()), None, 10, 0, &common);
+        let result = up(None, Some("cli-test".into()), None, 10, 0, false, &common);
         if let Err(e) = &result {
             eprintln!("up error: {e:?}");
         }
@@ -515,7 +602,7 @@ mod tests {
             nsec: None,
             json: false,
         };
-        assert!(up(None, Some("cli-test".into()), None, 10, 0, &common).is_err());
+        assert!(up(None, Some("cli-test".into()), None, 10, 0, false, &common).is_err());
     }
 
     #[test]

@@ -59,6 +59,14 @@ fn save_to(path: &Path, profile: &Profile) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Best-effort: replace the stored bearer token after a re-mint so the
+/// next run starts from a credential the current api accepts.
+pub fn refresh_token(token: &str) -> anyhow::Result<()> {
+    let mut profile = load()?;
+    profile.token = token.to_string();
+    save_to(&path()?, &profile)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
