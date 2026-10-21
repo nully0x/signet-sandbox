@@ -555,12 +555,8 @@ mod tests {
 
     #[test]
     fn unreachable_local_api_points_at_bootstrap() {
-        let client = Client::new("http://127.0.0.1:1", Auth::Bearer("sgn_t".into())).unwrap();
         // Probe the decision the same way ensure_local_api does.
         assert!(local::should_bootstrap(local::DEFAULT_LOCAL_API, false));
-        assert!(matches!(
-            local::should_bootstrap("http://hosted.example", false),
-            false
-        ));
+        assert!(!local::should_bootstrap("http://hosted.example", false));
     }
 }
