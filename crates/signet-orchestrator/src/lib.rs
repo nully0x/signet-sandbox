@@ -1016,7 +1016,7 @@ mod tests {
             ("faucet", "signet-faucet:dev"),
             ("electrs", "ghcr.io/nully0x/electrs:0.11.1"),
             ("explorer", "docker.io/mempool/backend:v3.3.1"),
-            ("lnd", "docker.io/lightninglabs/lnd:0.19.2-beta"),
+            ("lnd", "docker.io/lightninglabs/lnd:v0.21.4-beta"),
         ] {
             assert_eq!(images.get(key).unwrap(), image, "{key}");
         }
@@ -1250,7 +1250,7 @@ mod tests {
     fn resolve_images_versions_lnd_and_explorer_tags() {
         let tags = Some(BTreeMap::from([
             ("explorer".to_string(), "v3.3.1".to_string()),
-            ("lnd".to_string(), "0.18.5-beta".to_string()),
+            ("lnd".to_string(), "v0.20.5-beta".to_string()),
         ]));
         let images = resolve_images(&catalog(), &tags).unwrap();
         assert_eq!(
@@ -1259,7 +1259,7 @@ mod tests {
         );
         assert_eq!(
             images.get("lnd").unwrap(),
-            "docker.io/lightninglabs/lnd:0.18.5-beta"
+            "docker.io/lightninglabs/lnd:v0.20.5-beta"
         );
         assert_eq!(images.get("signer").unwrap(), "signet-signer:dev");
     }

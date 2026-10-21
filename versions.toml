@@ -19,11 +19,11 @@ default = true
 [electrs."0.10.9"]
 
 
-[lnd."0.19.2-beta"]
+[lnd."v0.21.4-beta"]
 default = true
 requires = { bitcoind = ">= 25" }
 
-[lnd."0.18.5-beta"]
+[lnd."v0.20.5-beta"]
 requires = { bitcoind = ">= 24" }
 
 [explorer."v3.3.1"]
