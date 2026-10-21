@@ -19,6 +19,8 @@ const SIGNER_MANIFEST: &str = include_str!("../templates/signer.yaml");
 const FAUCET_MANIFEST: &str = include_str!("../templates/faucet.yaml");
 const LND_MANIFEST: &str = include_str!("../templates/lnd.yaml");
 const LND_MACAROON_PATH: &str = "/root/.lnd/data/chain/bitcoin/signet/admin.macaroon";
+const LND_TLS_CERT_PATH: &str = "/root/.lnd/tls.cert";
+const LND_WALLET_PASSWORD_KEY: &str = "LND_WALLET_PASSWORD";
 const ELECTRS_MANIFEST: &str = include_str!("../templates/electrs.yaml");
 const EXPLORER_MANIFEST: &str = include_str!("../templates/explorer.yaml");
 const HTTPROUTE_MANIFEST: &str = include_str!("../templates/httproute.yaml");
@@ -538,20 +540,19 @@ impl Orchestrator {
         format!("https://lnd-{instance}.{}.svc:8080", namespace_for(env_id))
     }
 
-    /// Read the admin macaroon out of the instance's pod (hex-encoded).
-    /// Fails while the wallet is still being created — callers treat that
-    /// as "not ready yet".
-    pub async fn lightning_admin_macaroon(
+    /// Read one file out of an instance's pod via exec.
+    async fn read_pod_file(
         &self,
         env_id: &str,
         instance: &str,
-    ) -> Result<String, OrchestrateError> {
+        path: &str,
+    ) -> Result<Vec<u8>, OrchestrateError> {
         let ns = namespace_for(env_id);
         let pods: Api<Pod> = Api::namespaced(self.client.clone(), &ns);
         let attached = pods
             .exec(
                 &format!("lnd-{instance}"),
-                vec!["cat", LND_MACAROON_PATH],
+                vec!["cat", path],
                 &AttachParams::default(),
             )
             .await?;
@@ -563,7 +564,81 @@ impl Orchestrator {
         tokio::io::AsyncReadExt::read_to_end(&mut stdout, &mut buf)
             .await
             .map_err(|e| OrchestrateError::Exec(e.to_string()))?;
+        Ok(buf)
+    }
+
+    /// Read the admin macaroon out of the instance's pod (hex-encoded).
+    /// Fails while the wallet is still being created — callers treat that
+    /// as "not ready yet".
+    pub async fn lightning_admin_macaroon(
+        &self,
+        env_id: &str,
+        instance: &str,
+    ) -> Result<String, OrchestrateError> {
+        let buf = self
+            .read_pod_file(env_id, instance, LND_MACAROON_PATH)
+            .await?;
         Ok(encode_hex(&buf))
+    }
+
+    /// Read the instance's self-signed TLS cert (PEM). LND generates it
+    /// on first boot; it is public material — only the macaroon is a
+    /// secret. Callers treat a failure as "not ready yet".
+    pub async fn lightning_tls_cert(
+        &self,
+        env_id: &str,
+        instance: &str,
+    ) -> Result<String, OrchestrateError> {
+        let buf = self
+            .read_pod_file(env_id, instance, LND_TLS_CERT_PATH)
+            .await?;
+        String::from_utf8(buf).map_err(|e| OrchestrateError::Exec(e.to_string()))
+    }
+
+    /// Apply additional lightning instances into an existing env's
+    /// namespace. `lnd_wallet_password` seeds the shared secret only when
+    /// the key is absent — envs provisioned before the key existed must
+    /// still accept new instances.
+    pub async fn add_lightning_instances(
+        &self,
+        env_id: &str,
+        instances: &[LightningInstance],
+        images: &BTreeMap<String, String>,
+        lnd_wallet_password: &str,
+    ) -> Result<(), OrchestrateError> {
+        let ns = namespace_for(env_id);
+        self.ensure_lnd_wallet_password(&ns, lnd_wallet_password)
+            .await?;
+        for instance in instances {
+            self.apply_lnd(&ns, instance, images).await?;
+        }
+        Ok(())
+    }
+
+    /// Patch the env secret with a wallet password if the key is missing.
+    /// Existing instances must keep the password their wallet was created
+    /// with, so a present key is never touched.
+    async fn ensure_lnd_wallet_password(
+        &self,
+        ns: &str,
+        password: &str,
+    ) -> Result<(), OrchestrateError> {
+        let secrets: Api<Secret> = Api::namespaced(self.client.clone(), ns);
+        let secret = secrets.get(SECRET_NAME).await?;
+        if secret
+            .data
+            .as_ref()
+            .is_some_and(|data| data.contains_key(LND_WALLET_PASSWORD_KEY))
+        {
+            return Ok(());
+        }
+        let patch = Patch::Merge(json!({
+            "stringData": { LND_WALLET_PASSWORD_KEY: password },
+        }));
+        secrets
+            .patch(SECRET_NAME, &PatchParams::default(), &patch)
+            .await?;
+        Ok(())
     }
 
     pub async fn destroy_environment(&self, env_id: &str) -> Result<(), OrchestrateError> {

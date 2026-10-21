@@ -175,6 +175,7 @@ async fn handle(state: &AppState, caller: Caller, via_nip98: bool, request: Requ
         "environment.create" => environment_create(state, id, caller, request.params).await,
         "environment.list" => environment_list(state, id, caller).await,
         "environment.get" => environment_get(state, id, caller, request.params).await,
+        "environment.update" => environment_update(state, id, caller, request.params).await,
         "environment.stop" => environment_stop(state, id, caller, request.params).await,
         "environment.start" => environment_start(state, id, caller, request.params).await,
         "environment.destroy" => environment_destroy(state, id, caller, request.params).await,
@@ -508,55 +509,231 @@ async fn environment_get(state: &AppState, id: Id, caller: Caller, params: Value
         status_as_env(&row.status)
     };
 
+    bundle_response(state, id, &row, status).await
+}
+
+/// Assemble and serialize the full bundle for one row: live rpc
+/// credentials plus per-instance lightning entries.
+async fn bundle_response(
+    state: &AppState,
+    id: Id,
+    row: &EnvironmentRow,
+    status: EnvStatus,
+) -> Response {
     let rpc_auth = state
         .orchestrator
         .rpc_credentials(&short_id(row.id))
         .await
         .ok()
         .map(|(u, p)| format!("{u}:{p}"));
+    let lightning = lightning_connections(state, row.id, status).await;
+    Response::result(
+        Some(id),
+        serde_json::to_value(bundle_for(row, status, rpc_auth, lightning))
+            .expect("bundle serializes"),
+    )
+}
 
-    let mut lightning = BTreeMap::new();
-    if status == EnvStatus::Ready {
-        let instances = match signet_db::get_lightning_instances(&state.pool, row.id).await {
-            Ok(instances) => instances,
-            Err(e) => {
-                tracing::warn!(error = %e, "lightning instance lookup failed");
-                Vec::new()
-            }
-        };
-        for instance in instances {
-            match state
+/// Per-instance connection entries for a bundle. An entry appears only
+/// once its pod serves both macaroon and TLS cert; anything shorter is
+/// "not ready yet" and omitted.
+async fn lightning_connections(
+    state: &AppState,
+    env_id: Uuid,
+    status: EnvStatus,
+) -> BTreeMap<String, LightningConnection> {
+    let mut connections = BTreeMap::new();
+    if status != EnvStatus::Ready {
+        return connections;
+    }
+    let instances = match signet_db::get_lightning_instances(&state.pool, env_id).await {
+        Ok(instances) => instances,
+        Err(e) => {
+            tracing::warn!(error = %e, "lightning instance lookup failed");
+            return connections;
+        }
+    };
+    let short = short_id(env_id);
+    for instance in instances {
+        let connection = async {
+            let macaroon = state
                 .orchestrator
-                .lightning_admin_macaroon(&short_id(row.id), &instance.name)
-                .await
-            {
-                Ok(macaroon) => {
-                    lightning.insert(
-                        instance.name.clone(),
-                        LightningConnection {
-                            implementation: instance.implementation.clone(),
-                            rest_url: state
-                                .orchestrator
-                                .lightning_rest_url(&short_id(row.id), &instance.name),
-                            auth: signet_core::bundle::BundleAuth {
-                                kind: "macaroon".to_string(),
-                                value: macaroon,
-                            },
-                        },
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, env = %row.id, instance = %instance.name, "admin macaroon unavailable; omitting instance");
-                }
+                .lightning_admin_macaroon(&short, &instance.name)
+                .await?;
+            let tls_cert = state
+                .orchestrator
+                .lightning_tls_cert(&short, &instance.name)
+                .await?;
+            Ok::<_, signet_orchestrator::OrchestrateError>(LightningConnection {
+                implementation: instance.implementation.clone(),
+                rest_url: state
+                    .orchestrator
+                    .lightning_rest_url(&short, &instance.name),
+                tls_cert,
+                auth: signet_core::bundle::BundleAuth {
+                    kind: "macaroon".to_string(),
+                    value: macaroon,
+                },
+            })
+        };
+        match connection.await {
+            Ok(connection) => {
+                connections.insert(instance.name.clone(), connection);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    env = %env_id,
+                    instance = %instance.name,
+                    "lightning connection unavailable; omitting instance"
+                );
             }
         }
     }
+    connections
+}
 
-    Response::result(
-        Some(id),
-        serde_json::to_value(bundle_for(&row, status, rpc_auth, lightning))
-            .expect("bundle serializes"),
-    )
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateParams {
+    id: String,
+    components: UpdateComponents,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateComponents {
+    lightning: Vec<signet_core::env::LightningInstance>,
+}
+
+/// v1 update scope: add lightning instances to a ready environment.
+/// Removals, ttl changes, and other component changes are rejected —
+/// the full update surface lands later.
+async fn environment_update(state: &AppState, id: Id, caller: Caller, params: Value) -> Response {
+    let params: UpdateParams = match serde_json::from_value(params) {
+        Ok(p) => p,
+        Err(e) => return Response::error(Some(id), Error::new(INVALID_PARAMS, e.to_string())),
+    };
+
+    let mut row = match resolve_environment(state, &caller, &params.id).await {
+        Ok(row) => row,
+        Err(e) => return Response::error(Some(id), e),
+    };
+
+    if row.npub_owner != caller.npub {
+        return Response::error(
+            Some(id),
+            Error::new(FORBIDDEN, "caller is not the environment owner"),
+        );
+    }
+
+    reconcile_reaped(state, &mut row).await;
+
+    if row.status != "ready" {
+        return Response::error(
+            Some(id),
+            Error::new(
+                INVALID_PARAMS,
+                format!(
+                    "environment `{}` is {} — only ready environments can be updated",
+                    row.name, row.status
+                ),
+            ),
+        );
+    }
+
+    if let Err(message) = validate_lightning(&params.components.lightning) {
+        return Response::error(Some(id), Error::new(INVALID_PARAMS, message));
+    }
+
+    if !params.components.lightning.is_empty() && !row.component_indexer {
+        return Response::error(
+            Some(id),
+            Error::new(
+                INVALID_PARAMS,
+                "adding lightning requires the indexer component",
+            ),
+        );
+    }
+
+    let existing = match signet_db::get_lightning_instances(&state.pool, row.id).await {
+        Ok(existing) => existing,
+        Err(e) => {
+            tracing::error!(error = %e, "lightning instance lookup failed");
+            return Response::error(
+                Some(id),
+                Error::new(INTERNAL_ERROR, "lightning instance lookup failed"),
+            );
+        }
+    };
+    for instance in &existing {
+        if !params
+            .components
+            .lightning
+            .iter()
+            .any(|p| p.name == instance.name)
+        {
+            return Response::error(
+                Some(id),
+                Error::new(
+                    INVALID_PARAMS,
+                    format!(
+                        "removing lightning instance `{}` is not supported",
+                        instance.name
+                    ),
+                ),
+            );
+        }
+    }
+    let additions: Vec<signet_core::env::LightningInstance> = params
+        .components
+        .lightning
+        .iter()
+        .filter(|p| !existing.iter().any(|e| e.name == p.name))
+        .cloned()
+        .collect();
+
+    if additions.is_empty() {
+        return bundle_response(state, id, &row, EnvStatus::Ready).await;
+    }
+
+    let images: BTreeMap<String, String> = match row.versions.as_ref() {
+        Some(versions) => match serde_json::from_value(versions.clone()) {
+            Ok(images) => images,
+            Err(e) => {
+                tracing::error!(error = %e, "stored version map unreadable");
+                return Response::error(
+                    Some(id),
+                    Error::new(INTERNAL_ERROR, "environment update failed"),
+                );
+            }
+        },
+        None => match signet_orchestrator::resolve_images(&state.catalog, &None) {
+            Ok(images) => images,
+            Err(e) => return Response::error(Some(id), Error::new(INVALID_PARAMS, e.to_string())),
+        },
+    };
+
+    let wallet_password = Uuid::new_v4().simple().to_string();
+    if let Err(e) = state
+        .orchestrator
+        .add_lightning_instances(&short_id(row.id), &additions, &images, &wallet_password)
+        .await
+    {
+        tracing::error!(error = %e, "lightning provisioning failed");
+        return Response::error(
+            Some(id),
+            Error::new(INTERNAL_ERROR, "environment update failed"),
+        );
+    }
+
+    if let Err(e) =
+        signet_db::set_lightning_instances(&state.pool, row.id, &params.components.lightning).await
+    {
+        tracing::error!(error = %e, "lightning instance persist failed");
+    }
+
+    bundle_response(state, id, &row, EnvStatus::Ready).await
 }
 
 /// Converge a row whose namespace the reaper (or anything else) removed:

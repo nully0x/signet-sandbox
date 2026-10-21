@@ -17,6 +17,9 @@ pub struct BundleAuth {
 pub struct LightningConnection {
     pub implementation: String,
     pub rest_url: String,
+    /// Instance's self-signed TLS cert in PEM form. Public material;
+    /// clients pin it instead of disabling verification.
+    pub tls_cert: String,
     pub auth: BundleAuth,
 }
 
@@ -97,6 +100,7 @@ mod tests {
             LightningConnection {
                 implementation: "lnd".into(),
                 rest_url: "https://example/env/ln/rest".into(),
+                tls_cert: "-----BEGIN CERTIFICATE-----".into(),
                 auth: BundleAuth {
                     kind: "macaroon".into(),
                     value: "0201".into(),
@@ -117,6 +121,7 @@ mod tests {
             LightningConnection {
                 implementation: "lnd".into(),
                 rest_url: "https://example/ln".into(),
+                tls_cert: "-----BEGIN CERTIFICATE-----".into(),
                 auth: BundleAuth {
                     kind: "macaroon".into(),
                     value: "0202".into(),
