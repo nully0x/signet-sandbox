@@ -7,3 +7,5 @@ result-*
 *.sqlite-*
 /deploy/compose/bitcoin.conf
 
+ui/node_modules/
+ui/dist/

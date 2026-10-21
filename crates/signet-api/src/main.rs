@@ -1,3 +1,4 @@
+mod dashboard;
 mod rpc;
 
 use std::net::SocketAddr;

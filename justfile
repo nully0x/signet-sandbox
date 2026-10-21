@@ -2,6 +2,11 @@ set dotenv-load := true
 
 cluster := "signet"
 
+
+# this starts the shell
+shell:
+  nix develop
+
 # --- cluster operations (no sudo; disposable) ---
 
 # create or start the dev cluster + gateway stack
@@ -81,6 +86,11 @@ db-down:
 # generate signer key + challenge + credentials into .env (pass --force to regenerate)
 local-setup *ARGS:
     bash scripts/local-setup.sh {{ARGS}}
+
+# build the dashboard into ui/dist (the api embeds it; a stub is
+# generated at compile time when dist is absent)
+ui-build:
+    npm --prefix ui run build
 
 # run the API natively (reads .env)
 dev-api:
