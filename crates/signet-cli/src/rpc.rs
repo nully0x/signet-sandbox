@@ -39,7 +39,7 @@ impl Client {
 
     /// The exact URL requests go to; NIP-98 signatures must cover it.
     pub fn rpc_url(&self) -> String {
-        format!("{}/v1/rpc", self.api_url)
+        format!("{}/api/rpc", self.api_url)
     }
 
     pub fn call(&self, method: &str, params: Value) -> Result<Value, CallError> {

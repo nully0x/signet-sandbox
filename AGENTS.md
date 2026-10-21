@@ -66,7 +66,8 @@ output redirected to a log and polled.
 
 ## Conventions
 
-- Wire protocol: JSON-RPC 2.0 over `POST /v1/rpc`, methods `environment.*`,
+- Wire protocol: JSON-RPC 2.0 over `POST /api/rpc` (the API shares its port
+  with the dashboard, which serves from `/`), methods `environment.*`,
   `token.*`.
   Failures are JSON-RPC error objects (codes in `signet-rpc/src/error.rs`),
   never HTTP status semantics.

@@ -53,7 +53,8 @@ pub fn router(
 ) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
-        .route("/v1/rpc", post(dispatch))
+        .route("/api/rpc", post(dispatch))
+        .fallback(crate::dashboard::dashboard)
         .with_state(AppState {
             catalog,
             pool,
@@ -132,7 +133,7 @@ fn verify_nip98(
     max_age: Option<Duration>,
 ) -> Result<Caller, Error> {
     let header = format!("Nostr {payload}");
-    let url = format!("{public_url}/v1/rpc");
+    let url = format!("{public_url}/api/rpc");
     match verify_nip98_header(&header, &url, method, max_age) {
         Ok(npub) => Ok(Caller { npub }),
         Err(e) => Err(Error::new(
@@ -1046,7 +1047,7 @@ mod tests {
     use nostr::types::Timestamp;
 
     const PUBLIC_URL: &str = "http://localhost:8081";
-    const RPC_URL: &str = "http://localhost:8081/v1/rpc";
+    const RPC_URL: &str = "http://localhost:8081/api/rpc";
 
     fn auth_header(keys: &Keys, url: &str, method: &str) -> String {
         let event = EventBuilder::new(Kind::HttpAuth, "")
@@ -1086,7 +1087,7 @@ mod tests {
     #[test]
     fn nip98_url_mismatch_is_unauthenticated() {
         let keys = Keys::parse(&format!("{:064x}", 7)).unwrap();
-        let header = auth_header(&keys, "http://evil.example/v1/rpc", "POST");
+        let header = auth_header(&keys, "http://evil.example/api/rpc", "POST");
         assert!(is_unauthenticated(&verified(&header).unwrap_err()));
     }
 

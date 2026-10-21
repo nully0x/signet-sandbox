@@ -70,7 +70,7 @@ mod tests {
     fn bearer_header_passthrough() {
         let auth = from_flags(Some("sgn_00ab".into()), None).unwrap();
         assert_eq!(
-            auth.header("http://x/v1/rpc", "POST").unwrap(),
+            auth.header("http://x/api/rpc", "POST").unwrap(),
             "Bearer sgn_00ab"
         );
     }
@@ -78,10 +78,12 @@ mod tests {
     #[test]
     fn nip98_header_verifies_against_the_server() {
         let auth = from_flags(None, Some(test_key())).unwrap();
-        let header = auth.header("http://localhost:8081/v1/rpc", "POST").unwrap();
+        let header = auth
+            .header("http://localhost:8081/api/rpc", "POST")
+            .unwrap();
         let npub = verify_nip98_header(
             &header,
-            "http://localhost:8081/v1/rpc",
+            "http://localhost:8081/api/rpc",
             "POST",
             Some(Duration::from_secs(300)),
         )
@@ -92,11 +94,13 @@ mod tests {
     #[test]
     fn nip98_header_rejects_a_different_url() {
         let auth = from_flags(None, Some(test_key())).unwrap();
-        let header = auth.header("http://localhost:8081/v1/rpc", "POST").unwrap();
+        let header = auth
+            .header("http://localhost:8081/api/rpc", "POST")
+            .unwrap();
         assert!(
             verify_nip98_header(
                 &header,
-                "http://elsewhere/v1/rpc",
+                "http://elsewhere/api/rpc",
                 "POST",
                 Some(Duration::from_secs(300)),
             )
