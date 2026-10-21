@@ -3,16 +3,42 @@
 
   let revealed = $state(false)
   let copied = $state(false)
+  let failed = $state(false)
 
   const masked = $derived(secret && !revealed)
   const display = $derived(masked ? '•'.repeat(Math.min(value.length, 24)) : value)
 
   async function copy() {
-    await navigator.clipboard.writeText(value)
-    copied = true
-    setTimeout(() => (copied = false), 1200)
+    const ok = await writeClipboard(value)
+    copied = ok
+    failed = !ok
+    setTimeout(() => {
+      copied = false
+      failed = false
+    }, 1200)
   }
-</script>
+
+  async function writeClipboard(text: string): Promise<boolean> {
+    // The async clipboard API exists only in secure contexts; a plain
+    // execCommand fallback covers plain-http access over a LAN IP.
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text)
+        return true
+      } catch {
+        // fall through to the legacy path
+      }
+    }
+    const area = document.createElement('textarea')
+    area.value = text
+    area.style.position = 'fixed'
+    area.style.opacity = '0'
+    document.body.appendChild(area)
+    area.select()
+    const ok = document.execCommand('copy')
+    area.remove()
+    return ok
+  }</script>
 
 <div class="copyable" class:multiline>
   <span class="label">{label}</span>
@@ -30,7 +56,7 @@
       </button>
     {/if}
     <button class="ghost" onclick={copy} disabled={!value}>
-      {copied ? 'copied' : 'copy'}
+      {copied ? 'copied' : failed ? 'failed' : 'copy'}
     </button>
   </span>
 </div>

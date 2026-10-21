@@ -1,23 +1,23 @@
 /* signet design system — deliberately plain.
-   Light background, one accent, hairline borders, system type.
+   Dark background, one accent, hairline borders, system type.
    Monospace is reserved for values people copy. */
 
 :root {
-  --bg: #f5f6f7;
-  --panel: #ffffff;
-  --panel-deep: #fafbfc;
-  --line: #d7dce1;
-  --line-strong: #b8c1c9;
-  --ink: #1a2430;
-  --dim: #5d6b78;
-  --faint: #8b98a5;
-  --hover: #eef2f5;
+  --bg: #121417;
+  --panel: #1a1e23;
+  --panel-deep: #16191d;
+  --line: #2c333b;
+  --line-strong: #434d58;
+  --ink: #e8ecef;
+  --dim: #9aa7b2;
+  --faint: #646f7a;
+  --hover: #21262c;
 
-  --accent: #1f5fd0;
-  --accent-ink: #ffffff;
+  --accent: #5aa2ff;
+  --accent-ink: #0b1220;
 
-  --green: #15803d;
-  --red: #c02626;
+  --green: #3fce7c;
+  --red: #f0564f;
 
   --font-data: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
   --radius: 4px;
@@ -42,6 +42,7 @@ body {
   font-size: 0.9rem;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  color-scheme: dark;
 }
 
 code {
@@ -110,8 +111,8 @@ h3 {
   color: var(--accent-ink);
 }
 .btn--primary:hover:not(:disabled) {
-  background: #1a51b0;
-  border-color: #1a51b0;
+  background: #79b4ff;
+  border-color: #79b4ff;
   color: var(--accent-ink);
 }
 .btn--danger {

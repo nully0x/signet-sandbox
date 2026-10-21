@@ -64,7 +64,7 @@ spec:
                   | lncli --network=signet unlock 2>/dev/null || true
               else
                 printf '%s\n%s\n' "$LND_WALLET_PASSWORD" "$LND_WALLET_PASSWORD" \
-                  | lncli --network=signet create --noseedbackup 2>/dev/null
+                  | lncli --network=signet create 2>/dev/null
               fi
 
               wait $LND_PID
