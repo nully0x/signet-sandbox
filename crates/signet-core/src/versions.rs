@@ -233,7 +233,7 @@ requires = { bitcoind = "< 29" }
         catalog
             .validate_selection(&BTreeMap::from([
                 ("electrs".to_string(), "0.11.1".to_string()),
-                ("lnd".to_string(), "0.19.2-beta".to_string()),
+                ("lnd".to_string(), "v0.20.5-beta".to_string()),
             ]))
             .unwrap();
     }
