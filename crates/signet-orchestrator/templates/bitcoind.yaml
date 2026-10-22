@@ -125,3 +125,9 @@ spec:
     - name: p2p
       port: 38333
       targetPort: 38333
+    - name: zmqblock
+      port: 28332
+      targetPort: 28332
+    - name: zmqtx
+      port: 28333
+      targetPort: 28333

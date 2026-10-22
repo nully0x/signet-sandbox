@@ -586,33 +586,40 @@ impl Orchestrator {
                 format!("{password}\n{password}\nn\n"),
             )
         };
-        self.exec_with_stdin(env_id, instance, &cmd, &input).await?;
-
-        // The macaroon is the proof: it is written once the wallet is
-        // initialized and the RPC server is serving.
-        for _ in 0..15 {
-            if self
-                .read_pod_file(env_id, instance, LND_MACAROON_PATH)
-                .await
-                .is_ok()
-            {
-                return Ok(());
-            }
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        let (output, success) = self.exec_with_stdin(env_id, instance, &cmd, &input).await?;
+        if !success {
+            return Err(OrchestrateError::Exec(format!(
+                "lnd-{instance} wallet {} failed: {}",
+                if wallet_exists { "unlock" } else { "create" },
+                output.trim()
+            )));
         }
-        Err(OrchestrateError::Exec(format!(
-            "lnd-{instance} wallet did not initialize"
-        )))
+
+        // The wallet database is the proof for a fresh init: lnd
+        // pre-creates macaroon files before the wallet exists.
+        if !wallet_exists {
+            for _ in 0..15 {
+                if self.pod_file_exists(env_id, instance, wallet_db).await? {
+                    return Ok(());
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+            return Err(OrchestrateError::Exec(format!(
+                "lnd-{instance} wallet did not initialize"
+            )));
+        }
+        Ok(())
     }
 
     /// Run a command in the instance's pod with a tty and stdin text.
+    /// Returns the merged output and the process exit status.
     async fn exec_with_stdin(
         &self,
         env_id: &str,
         instance: &str,
         cmd: &[&str],
         input: &str,
-    ) -> Result<String, OrchestrateError> {
+    ) -> Result<(String, bool), OrchestrateError> {
         let ns = namespace_for(env_id);
         let pods: Api<Pod> = Api::namespaced(self.client.clone(), &ns);
         let ap = AttachParams {
@@ -648,7 +655,11 @@ impl Orchestrator {
         tokio::io::AsyncReadExt::read_to_end(&mut stdout, &mut buf)
             .await
             .map_err(|e| OrchestrateError::Exec(e.to_string()))?;
-        Ok(String::from_utf8_lossy(&buf).into_owned())
+        let success = match attached.take_status() {
+            Some(fut) => fut.await.and_then(|s| s.status).as_deref() == Some("Success"),
+            None => false,
+        };
+        Ok((String::from_utf8_lossy(&buf).into_owned(), success))
     }
 
     /// Whether a path exists inside the instance's pod.

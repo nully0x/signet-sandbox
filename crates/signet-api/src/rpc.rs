@@ -452,6 +452,15 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
         .await
     {
         tracing::error!(error = %e, "environment provisioning failed");
+        // A failed create leaves a half-provisioned namespace behind;
+        // tear it down best-effort so nothing keeps running unmanaged.
+        if let Err(teardown) = state
+            .orchestrator
+            .destroy_environment(&short_id(env_id))
+            .await
+        {
+            tracing::error!(error = %teardown, "namespace cleanup after failed provisioning failed");
+        }
         let _ = signet_db::set_environment_status(&state.pool, env_id, "destroyed").await;
         return Response::error(
             Some(id),
