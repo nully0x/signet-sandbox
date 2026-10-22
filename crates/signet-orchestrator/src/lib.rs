@@ -20,6 +20,7 @@ const FAUCET_MANIFEST: &str = include_str!("../templates/faucet.yaml");
 const LND_MANIFEST: &str = include_str!("../templates/lnd.yaml");
 const LND_MACAROON_PATH: &str = "/root/.lnd/data/chain/bitcoin/signet/admin.macaroon";
 const LND_TLS_CERT_PATH: &str = "/root/.lnd/tls.cert";
+const LND_WALLET_DB_PATH: &str = "/root/.lnd/data/chain/bitcoin/signet/wallet.db";
 const LND_WALLET_PASSWORD_KEY: &str = "LND_WALLET_PASSWORD";
 const ELECTRS_MANIFEST: &str = include_str!("../templates/electrs.yaml");
 const EXPLORER_MANIFEST: &str = include_str!("../templates/explorer.yaml");
@@ -509,6 +510,13 @@ impl Orchestrator {
         for instance in &components.lightning {
             self.apply_lnd(&ns, instance, images).await?;
         }
+        // Wallet init is synchronous: an environment leaves provisioning
+        // fully operational, lightning included. lncli needs a tty, so
+        // the init runs through an exec with one attached.
+        for instance in &components.lightning {
+            self.init_wallet(env_id, &instance.name, &secrets.lnd_wallet_password)
+                .await?;
+        }
         if components.explorer {
             self.apply_explorer_route(&ns, env_id).await?;
         }
@@ -532,6 +540,140 @@ impl Orchestrator {
     ) -> Result<(), OrchestrateError> {
         let manifest = LND_MANIFEST.replace("LND_NAME", &instance.name);
         self.apply_manifest(ns, &manifest, images).await
+    }
+
+    /// Create or unlock one instance's wallet. lncli masks passwords
+    /// through the terminal and refuses piped stdin, so the exec runs
+    /// with an allocated tty and the password goes in over it.
+    async fn init_wallet(
+        &self,
+        env_id: &str,
+        instance: &str,
+        password: &str,
+    ) -> Result<(), OrchestrateError> {
+        // lnd must be up: its boot writes the tls cert the exec needs.
+        let mut booted = false;
+        for _ in 0..30 {
+            if self
+                .read_pod_file(env_id, instance, LND_TLS_CERT_PATH)
+                .await
+                .is_ok()
+            {
+                booted = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+        if !booted {
+            return Err(OrchestrateError::Exec(format!(
+                "lnd-{instance} did not become ready in time"
+            )));
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+        let wallet_db = LND_WALLET_DB_PATH;
+        let wallet_exists = self.pod_file_exists(env_id, instance, wallet_db).await?;
+        // create prompts for the password twice, then asks whether to
+        // restore an existing seed — answered "n" to generate one.
+        let (cmd, input) = if wallet_exists {
+            (
+                vec!["lncli", "--network=signet", "unlock"],
+                format!("{password}\n"),
+            )
+        } else {
+            (
+                vec!["lncli", "--network=signet", "create"],
+                format!("{password}\n{password}\nn\n"),
+            )
+        };
+        self.exec_with_stdin(env_id, instance, &cmd, &input).await?;
+
+        // The macaroon is the proof: it is written once the wallet is
+        // initialized and the RPC server is serving.
+        for _ in 0..15 {
+            if self
+                .read_pod_file(env_id, instance, LND_MACAROON_PATH)
+                .await
+                .is_ok()
+            {
+                return Ok(());
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+        Err(OrchestrateError::Exec(format!(
+            "lnd-{instance} wallet did not initialize"
+        )))
+    }
+
+    /// Run a command in the instance's pod with a tty and stdin text.
+    async fn exec_with_stdin(
+        &self,
+        env_id: &str,
+        instance: &str,
+        cmd: &[&str],
+        input: &str,
+    ) -> Result<String, OrchestrateError> {
+        let ns = namespace_for(env_id);
+        let pods: Api<Pod> = Api::namespaced(self.client.clone(), &ns);
+        let ap = AttachParams {
+            stdin: true,
+            stdout: true,
+            // k8s merges stderr into stdout when a tty is allocated.
+            stderr: false,
+            tty: true,
+            max_stdout_buf_size: Some(64 * 1024),
+            ..Default::default()
+        };
+        let mut attached = pods
+            .exec(&format!("lnd-{instance}"), cmd.to_vec(), &ap)
+            .await?;
+        {
+            let mut stdin = attached
+                .stdin()
+                .ok_or_else(|| OrchestrateError::Exec("no stdin".to_string()))?;
+            use tokio::io::AsyncWriteExt;
+            stdin
+                .write_all(input.as_bytes())
+                .await
+                .map_err(|e| OrchestrateError::Exec(e.to_string()))?;
+            stdin
+                .shutdown()
+                .await
+                .map_err(|e| OrchestrateError::Exec(e.to_string()))?;
+        }
+        let mut stdout = attached
+            .stdout()
+            .ok_or_else(|| OrchestrateError::Exec("no stdout".to_string()))?;
+        let mut buf = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut stdout, &mut buf)
+            .await
+            .map_err(|e| OrchestrateError::Exec(e.to_string()))?;
+        Ok(String::from_utf8_lossy(&buf).into_owned())
+    }
+
+    /// Whether a path exists inside the instance's pod.
+    async fn pod_file_exists(
+        &self,
+        env_id: &str,
+        instance: &str,
+        path: &str,
+    ) -> Result<bool, OrchestrateError> {
+        let ns = namespace_for(env_id);
+        let pods: Api<Pod> = Api::namespaced(self.client.clone(), &ns);
+        let mut attached = pods
+            .exec(
+                &format!("lnd-{instance}"),
+                vec!["ls", path],
+                &AttachParams::default(),
+            )
+            .await?;
+        match attached.take_status() {
+            Some(fut) => {
+                let status = fut.await;
+                Ok(status.and_then(|s| s.status).as_deref() == Some("Success"))
+            }
+            None => Ok(false),
+        }
     }
 
     /// In-cluster REST address of one Lightning instance. Reachable from
@@ -611,6 +753,8 @@ impl Orchestrator {
             .await?;
         for instance in instances {
             self.apply_lnd(&ns, instance, images).await?;
+            self.init_wallet(env_id, &instance.name, lnd_wallet_password)
+                .await?;
         }
         Ok(())
     }

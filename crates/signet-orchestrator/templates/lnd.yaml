@@ -37,12 +37,11 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - |
-              # Polar-style automation, adapted to k8s: start lnd in the
-              # background, wait for its RPC *port* (a locked or missing
-              # wallet answers lncli with errors, so the port is the only
-              # reliable readiness signal), then branch on wallet.db.
-              set -e
-              lnd \
+              # lnd runs in the foreground; the orchestrator initializes or
+              # unlocks the wallet over an exec'd tty once the RPC server
+              # is up (lncli masks passwords through the terminal, so the
+              # init cannot be piped from a shell script).
+              exec lnd \
                 --noseedbackup \
                 --bitcoin.signet \
                 --bitcoin.node=bitcoind \
@@ -53,21 +52,7 @@ spec:
                 --bitcoind.zmqpubrawtx=tcp://bitcoind:28333 \
                 --rpclisten=0.0.0.0:10009 \
                 --restlisten=0.0.0.0:8080 \
-                --tlsextradomain=lnd-LND_NAME &
-              LND_PID=$!
-              trap 'kill $LND_PID' TERM INT
-              until nc -z 127.0.0.1 10009 2>/dev/null; do sleep 1; done
-
-              WALLET_DB=/root/.lnd/data/chain/bitcoin/signet/wallet.db
-              if [ -f "$WALLET_DB" ]; then
-                printf '%s\n' "$LND_WALLET_PASSWORD" \
-                  | lncli --network=signet unlock 2>/dev/null || true
-              else
-                printf '%s\n%s\n' "$LND_WALLET_PASSWORD" "$LND_WALLET_PASSWORD" \
-                  | lncli --network=signet create 2>/dev/null
-              fi
-
-              wait $LND_PID
+                --tlsextradomain=lnd-LND_NAME
           env:
             - name: BITCOIN_RPC_USER
               valueFrom:
