@@ -1,7 +1,7 @@
 <script lang="ts">
   import { api } from '../lib/rpc'
 
-  let { onCreated }: { onCreated(name: string): void } = $props()
+  let { onCreated, onCancel }: { onCreated(name: string): void; onCancel(): void } = $props()
 
   let name = $state('')
   let ttl = $state('20m')
@@ -123,12 +123,20 @@
     <p class="error-text">{error}</p>
   {/if}
 
-  <button class="btn btn--primary" type="submit" disabled={!formValid || submitting}>
-    {submitting ? 'drafting…' : 'provision environment'}
-  </button>
+  <div class="form-actions">
+    <button class="btn" type="button" onclick={onCancel} disabled={submitting}>cancel</button>
+    <button class="btn btn--primary" type="submit" disabled={!formValid || submitting}>
+      {submitting ? 'drafting…' : 'provision environment'}
+    </button>
+  </div>
 </form>
 
 <style>
+  .form-actions {
+    display: flex;
+    gap: 0.6rem;
+    justify-content: flex-end;
+  }
   .check {
     display: flex;
     gap: 0.5rem;

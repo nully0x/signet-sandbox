@@ -77,7 +77,7 @@
   {#if !authenticated}
     <TokenGate onAuth={unlock} />
   {:else if route.view === 'new'}
-    <EnvCreate onCreated={openEnv} />
+    <EnvCreate onCreated={openEnv} onCancel={backToList} />
   {:else if route.view === 'env'}
     <EnvDetail envRef={route.ref} back={backToList} />
   {:else}

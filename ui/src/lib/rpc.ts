@@ -71,6 +71,7 @@ export interface BundleAuth {
 export interface LightningConnection {
   implementation: string
   rest_url: string
+  grpc_url: string
   tls_cert: string
   auth: BundleAuth
 }
@@ -108,6 +109,7 @@ export const api = {
   stop: (id: string) => call<unknown>('environment.stop', { id }),
   start: (id: string) => call<unknown>('environment.start', { id }),
   destroy: (id: string) => call<{ destroyed: boolean }>('environment.destroy', { id }),
+  delete: (id: string) => call<{ deleted: boolean }>('environment.delete', { id }),
   fund: (id: string, address: string, amount_sat: number) =>
     call<{ txid: string }>('environment.faucet', { id, address, amount_sat }),
 }

@@ -12,6 +12,7 @@
   let actionBusy = $state(false)
   let confirmName = $state('')
   let confirmingDestroy = $state(false)
+  let confirmingDelete = $state(false)
 
   let fundAddress = $state('')
   let fundAmount = $state<number | null>(null)
@@ -23,6 +24,9 @@
   const canStart = $derived(bundle?.status === 'stopped')
   const canDestroy = $derived(
     bundle !== null && !['destroyed', 'expired'].includes(bundle.status),
+  )
+  const canDelete = $derived(
+    bundle !== null && ['destroyed', 'expired'].includes(bundle.status),
   )
   const destroyArmed = $derived(confirmingDestroy && confirmName === envRef)
   const hasFaucet = $derived(bundle?.faucet_url !== null && bundle?.faucet_url !== undefined)
@@ -90,6 +94,27 @@
     confirmName = ''
   }
 
+  function toggleConfirmDelete() {
+    confirmingDelete = !confirmingDelete
+  }
+
+  async function purge() {
+    if (actionBusy || !bundle) return
+    actionBusy = true
+    error = ''
+    try {
+      await api.delete(envRef)
+      back()
+    } catch (e) {
+      if (e instanceof RpcError && e.code === UNAUTHENTICATED) {
+        back()
+        return
+      }
+      error = e instanceof Error ? e.message : 'delete failed'
+      actionBusy = false
+    }
+  }
+
   async function fund(event: SubmitEvent) {
     event.preventDefault()
     if (fundBusy || !fundAddress || !fundAmount || fundAmount <= 0) return
@@ -140,6 +165,19 @@
           disabled={!destroyArmed || actionBusy}
         >
           confirm destroy
+        </button>
+      </span>
+    {/if}
+    {#if canDelete}
+      <button class="btn btn--danger" onclick={toggleConfirmDelete} disabled={actionBusy}>
+        {confirmingDelete ? 'cancel' : 'delete record'}
+      </button>
+    {/if}
+    {#if confirmingDelete && canDelete}
+      <span class="confirm-cluster">
+        <span class="note">removes the record; the cluster is already gone</span>
+        <button class="btn btn--danger confirm" onclick={purge} disabled={actionBusy}>
+          confirm delete
         </button>
       </span>
     {/if}
@@ -217,6 +255,7 @@
       <div class="instance">
         <h3>{name} <span class="impl">{ln.implementation}</span></h3>
         <Copyable label="rest url" value={ln.rest_url} />
+        <Copyable label="grpc url" value={ln.grpc_url} />
         <Copyable label="macaroon" value={ln.auth.value} secret />
         <Copyable label="tls cert" value={ln.tls_cert} secret multiline />
       </div>
