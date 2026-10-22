@@ -280,6 +280,8 @@ fn ensure_cluster(bin: &Path) -> anyhow::Result<()> {
         println!("creating k3d cluster `{CLUSTER}`");
         run(k3d(bin)?
             .args(["cluster", "create", CLUSTER])
+            .arg("--api-port")
+            .arg("34611")
             .arg("--port")
             .arg("80:80@loadbalancer")
             .arg("--port")
@@ -287,7 +289,9 @@ fn ensure_cluster(bin: &Path) -> anyhow::Result<()> {
             .arg("--port")
             .arg("8081:8081@loadbalancer")
             .arg("--port")
-            .arg("50002-50011:50002-50011@loadbalancer")
+            .arg("20000-20599:20000-20599@loadbalancer")
+            .arg("--port")
+            .arg("21000-21199:21000-21199@loadbalancer")
             .arg("--volume")
             .arg("signet-data:/var/lib/rancher/k3s/storage@server:0"))?;
         run(k3d(bin)?.args(["kubeconfig", "write", CLUSTER]))?;

@@ -2,6 +2,8 @@
 # before apply. Connects to the environment's one bitcoind over RPC + ZMQ.
 # First boot creates the wallet (--noseedbackup: env wallets are disposable);
 # later boots unlock it. The admin macaroon is read by the api via exec.
+# StatefulSet, not Deployment: the orchestrator execs into the pod by its
+# stable name (lnd-LND_NAME-0); a Deployment's hashed pod names would not match.
 apiVersion: v1
 kind: Service
 metadata:
@@ -18,10 +20,11 @@ spec:
       targetPort: 10009
 ---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: lnd-LND_NAME
 spec:
+  serviceName: lnd-LND_NAME
   replicas: 1
   selector:
     matchLabels:
@@ -41,6 +44,13 @@ spec:
               # unlocks the wallet over an exec'd tty once the RPC server
               # is up (lncli masks passwords through the terminal, so the
               # init cannot be piped from a shell script).
+              EXTRA_HOST_FLAG=""
+              if [ -n "$LND_EXTRA_HOST" ]; then
+                case "$LND_EXTRA_HOST" in
+                  *[!0-9.]*) EXTRA_HOST_FLAG="--tlsextradomain=$LND_EXTRA_HOST" ;;
+                  *) EXTRA_HOST_FLAG="--tlsextraip=$LND_EXTRA_HOST" ;;
+                esac
+              fi
               exec lnd \
                 --noseedbackup \
                 --bitcoin.signet \
@@ -52,7 +62,7 @@ spec:
                 --bitcoind.zmqpubrawtx=tcp://bitcoind:28333 \
                 --rpclisten=0.0.0.0:10009 \
                 --restlisten=0.0.0.0:8080 \
-                --tlsextradomain=lnd-LND_NAME
+                $EXTRA_HOST_FLAG
           env:
             - name: BITCOIN_RPC_USER
               valueFrom:
@@ -69,6 +79,8 @@ spec:
                 secretKeyRef:
                   name: signet-secrets
                   key: LND_WALLET_PASSWORD
+            - name: LND_EXTRA_HOST
+              value: LND_EXTRA_HOST
           ports:
             - name: rest
               containerPort: 8080
@@ -79,17 +91,11 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /root/.lnd
-      volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: lnd-LND_NAME
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: lnd-LND_NAME
-spec:
-  accessModes: [ReadWriteOnce]
-  resources:
-    requests:
-      storage: 1Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi

@@ -30,7 +30,9 @@ impl Client {
     pub fn new(api_url: &str, auth: Auth) -> anyhow::Result<Self> {
         Ok(Self {
             http: reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(30))
+                // create blocks server-side for the whole provisioning
+                // (premine, electrs, lnd readiness) — minutes, not seconds
+                .timeout(Duration::from_secs(600))
                 .build()?,
             api_url: api_url.trim_end_matches('/').to_string(),
             auth,

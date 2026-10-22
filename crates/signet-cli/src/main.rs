@@ -133,6 +133,13 @@ enum Command {
         #[command(flatten)]
         common: Common,
     },
+    /// Remove a destroyed or expired environment's record
+    Delete {
+        /// Environment id or name
+        env: String,
+        #[command(flatten)]
+        common: Common,
+    },
     /// Mint a bearer API token (NIP-98-only; prints the raw token)
     ///
     /// Without --nsec, signs with the local profile identity from
@@ -204,6 +211,7 @@ fn run(command: Command) -> u8 {
             common,
         } => fund(&env, &address, amount, &common),
         Command::Down { env, common } => down(&env, &common),
+        Command::Delete { env, common } => delete(&env, &common),
         Command::Token { nsec, api, json } => token(nsec, &api, json),
         Command::Schema {} => schema(),
         Command::Bootstrap => local::bootstrap().map_err(CliError::from),
@@ -285,6 +293,14 @@ fn up(
         }
     };
     let params = config::build_create_params(cfg.as_ref(), name, ttl)?;
+    // The create call consumes params; keep the instance names for the
+    // wallet wait below.
+    let lightning_names: Vec<String> = params
+        .components
+        .lightning
+        .iter()
+        .map(|l| l.name.clone())
+        .collect();
 
     let started = Instant::now();
     let mut bundle: ConnectionBundle =
@@ -314,6 +330,36 @@ fn up(
             }
         }
         eprintln!("ready after {}s", started.elapsed().as_secs());
+    }
+
+    // Lightning wallets self-initialize after the pods start; a bundle
+    // carries an instance only once its wallet answers. Callers that
+    // asked for lightning almost always want the nodes, so wait here —
+    // CI tolerates the extra minute.
+    if !lightning_names.is_empty() {
+        eprintln!("waiting for lightning wallets…");
+        let deadline = started + Duration::from_secs(timeout_secs);
+        loop {
+            bundle = poll_get(&client, &bundle.environment_id)?;
+            let have: Vec<_> = lightning_names
+                .iter()
+                .filter(|l| !bundle.lightning.contains_key(*l))
+                .cloned()
+                .collect();
+            if have.is_empty() {
+                break;
+            }
+            if Instant::now() >= deadline {
+                return Err(CliError::Other(anyhow::anyhow!(
+                    "timed out waiting for lightning wallets after {timeout_secs}s"
+                )));
+            }
+            std::thread::sleep(Duration::from_secs(poll_secs));
+        }
+        eprintln!(
+            "lightning wallets up after {}s",
+            started.elapsed().as_secs()
+        );
     }
 
     if common.json {
@@ -484,6 +530,26 @@ fn down(env: &str, common: &Common) -> Result<(), CliError> {
             )));
         }
         println!("environment {env} destroyed");
+    }
+    Ok(())
+}
+
+fn delete(env: &str, common: &Common) -> Result<(), CliError> {
+    let client = client(common)?;
+    let result = client.call("environment.delete", json!({ "id": env }))?;
+    if common.json {
+        output::print_json(&result)?;
+    } else {
+        let deleted = result
+            .get("deleted")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if !deleted {
+            return Err(CliError::Other(anyhow::anyhow!(
+                "environment.delete did not confirm deletion"
+            )));
+        }
+        println!("environment {env} deleted");
     }
     Ok(())
 }

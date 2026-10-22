@@ -180,6 +180,7 @@ async fn handle(state: &AppState, caller: Caller, via_nip98: bool, request: Requ
         "environment.stop" => environment_stop(state, id, caller, request.params).await,
         "environment.start" => environment_start(state, id, caller, request.params).await,
         "environment.destroy" => environment_destroy(state, id, caller, request.params).await,
+        "environment.delete" => environment_delete(state, id, caller, request.params).await,
         "environment.faucet" => environment_faucet(state, id, caller, request.params).await,
         _ => Response::error(Some(id), Error::method_not_found(&request.method)),
     }
@@ -324,16 +325,32 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
     };
     let versions_json = serde_json::to_value(&images).ok();
 
-    if let Ok(Some(_)) =
-        signet_db::get_environment_by_name(&state.pool, &caller.npub, &params.name).await
-    {
-        return Response::error(
-            Some(id),
-            Error::new(
-                INVALID_PARAMS,
-                format!("environment name `{}` already in use", params.name),
-            ),
-        );
+    // A name held by a dead record (destroyed or expired — cluster
+    // state already gone) is freed for reuse; live names stay taken.
+    match signet_db::get_environment_by_name(&state.pool, &caller.npub, &params.name).await {
+        Ok(Some(row)) if matches!(row.status.as_str(), "destroyed" | "expired") => {
+            if let Err(e) = signet_db::purge_environment(&state.pool, row.id).await {
+                tracing::error!(error = %e, "stale record purge failed");
+                return Response::error(
+                    Some(id),
+                    Error::new(INTERNAL_ERROR, "stale record cleanup failed"),
+                );
+            }
+        }
+        Ok(Some(_)) => {
+            return Response::error(
+                Some(id),
+                Error::new(
+                    INVALID_PARAMS,
+                    format!("environment name `{}` already in use", params.name),
+                ),
+            );
+        }
+        Ok(None) => {}
+        Err(e) => {
+            tracing::error!(error = %e, "environment name lookup failed");
+            return Response::error(Some(id), Error::new(INTERNAL_ERROR, "name lookup failed"));
+        }
     }
 
     if let Err(message) = validate_lightning(&params.components.lightning) {
@@ -365,22 +382,24 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
         .then(|| state.orchestrator.explorer_url(&short_id(env_id)));
     let electrs_requested = indexer || params.components.explorer;
     let electrum_port = if electrs_requested {
-        match signet_db::next_electrum_port(&state.pool, signet_orchestrator::ELECTRUM_PORT_BASE)
-            .await
+        match signet_db::next_electrum_port(
+            &state.pool,
+            signet_orchestrator::ELECTRUM_PORT_BASE,
+            signet_orchestrator::ELECTRUM_PORT_MAX,
+        )
+        .await
         {
-            Ok(port)
-                if (signet_orchestrator::ELECTRUM_PORT_BASE
-                    ..=signet_orchestrator::ELECTRUM_PORT_MAX)
-                    .contains(&port) =>
-            {
-                Some(port)
-            }
-            Ok(_) => {
+            Ok(Some(port)) => Some(port),
+            Ok(None) => {
                 return Response::error(
                     Some(id),
                     Error::new(
                         INVALID_PARAMS,
-                        "electrum port range exhausted (50002-50502)",
+                        format!(
+                            "electrum port range exhausted ({}-{})",
+                            signet_orchestrator::ELECTRUM_PORT_BASE,
+                            signet_orchestrator::ELECTRUM_PORT_MAX,
+                        ),
                     ),
                 );
             }
@@ -434,23 +453,57 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
         }
     };
 
-    if let Err(e) = state
-        .orchestrator
-        .create_environment(
-            &short_id(env_id),
-            &secrets,
-            &images,
-            EnvComponents {
-                indexer,
-                faucet: params.components.faucet,
-                explorer: params.components.explorer,
-                lightning: params.components.lightning.clone(),
-            },
-            electrum_port.map(|p| p as u16),
-            expires_at,
+    let mut lightning: Vec<(signet_core::env::LightningInstance, i32)> = Vec::new();
+    if !params.components.lightning.is_empty() {
+        match signet_db::next_lightning_ports(
+            &state.pool,
+            signet_orchestrator::LIGHTNING_PORT_BASE,
+            signet_orchestrator::LIGHTNING_PORT_MAX,
+            params.components.lightning.len(),
         )
         .await
-    {
+        {
+            Ok(ports) => {
+                lightning = params
+                    .components
+                    .lightning
+                    .iter()
+                    .cloned()
+                    .zip(ports)
+                    .collect();
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "lightning port allocation failed");
+                return Response::error(
+                    Some(id),
+                    Error::new(
+                        INVALID_PARAMS,
+                        format!(
+                            "lightning port pool exhausted ({}-{})",
+                            signet_orchestrator::LIGHTNING_PORT_BASE,
+                            signet_orchestrator::LIGHTNING_PORT_MAX,
+                        ),
+                    ),
+                );
+            }
+        }
+    }
+
+    let provision = signet_orchestrator::ProvisionParams {
+        env_id: &short_id(env_id),
+        secrets: &secrets,
+        images: &images,
+        components: EnvComponents {
+            indexer,
+            faucet: params.components.faucet,
+            explorer: params.components.explorer,
+            lightning: params.components.lightning.clone(),
+        },
+        electrum_port: electrum_port.map(|p| p as u16),
+        lightning: &lightning,
+        expires_at,
+    };
+    if let Err(e) = state.orchestrator.create_environment(&provision).await {
         tracing::error!(error = %e, "environment provisioning failed");
         // A failed create leaves a half-provisioned namespace behind;
         // tear it down best-effort so nothing keeps running unmanaged.
@@ -468,9 +521,7 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
         );
     }
 
-    if let Err(e) =
-        signet_db::set_lightning_instances(&state.pool, env_id, &params.components.lightning).await
-    {
+    if let Err(e) = signet_db::set_lightning_instances(&state.pool, env_id, &lightning).await {
         tracing::error!(error = %e, "lightning instance persist failed");
     }
 
@@ -565,6 +616,10 @@ async fn lightning_connections(
     };
     let short = short_id(env_id);
     for instance in instances {
+        let Some(port) = instance.port else {
+            tracing::warn!(env = %env_id, instance = %instance.name, "instance has no port; omitting");
+            return connections;
+        };
         let connection = async {
             let macaroon = state
                 .orchestrator
@@ -576,9 +631,8 @@ async fn lightning_connections(
                 .await?;
             Ok::<_, signet_orchestrator::OrchestrateError>(LightningConnection {
                 implementation: instance.implementation.clone(),
-                rest_url: state
-                    .orchestrator
-                    .lightning_rest_url(&short, &instance.name),
+                rest_url: state.orchestrator.lightning_rest_url(port),
+                grpc_url: state.orchestrator.lightning_grpc_url(port),
                 tls_cert,
                 auth: signet_core::bundle::BundleAuth {
                     kind: "macaroon".to_string(),
@@ -724,10 +778,55 @@ async fn environment_update(state: &AppState, id: Id, caller: Caller, params: Va
         },
     };
 
+    let mut lightning: Vec<(signet_core::env::LightningInstance, i32)> = existing
+        .iter()
+        .filter_map(|e| {
+            params
+                .components
+                .lightning
+                .iter()
+                .find(|p| p.name == e.name)
+                .map(|p| (p.clone(), e.port.unwrap_or_default()))
+        })
+        .collect();
+    let addition_pairs: Vec<(signet_core::env::LightningInstance, i32)> = if additions.is_empty() {
+        Vec::new()
+    } else {
+        match signet_db::next_lightning_ports(
+            &state.pool,
+            signet_orchestrator::LIGHTNING_PORT_BASE,
+            signet_orchestrator::LIGHTNING_PORT_MAX,
+            additions.len(),
+        )
+        .await
+        {
+            Ok(ports) => additions.iter().cloned().zip(ports).collect(),
+            Err(e) => {
+                tracing::error!(error = %e, "lightning port allocation failed");
+                return Response::error(
+                    Some(id),
+                    Error::new(
+                        INVALID_PARAMS,
+                        format!(
+                            "lightning port pool exhausted ({}-{})",
+                            signet_orchestrator::LIGHTNING_PORT_BASE,
+                            signet_orchestrator::LIGHTNING_PORT_MAX,
+                        ),
+                    ),
+                );
+            }
+        }
+    };
+    lightning.extend(addition_pairs.iter().cloned());
     let wallet_password = Uuid::new_v4().simple().to_string();
     if let Err(e) = state
         .orchestrator
-        .add_lightning_instances(&short_id(row.id), &additions, &images, &wallet_password)
+        .add_lightning_instances(
+            &short_id(row.id),
+            &addition_pairs,
+            &images,
+            &wallet_password,
+        )
         .await
     {
         tracing::error!(error = %e, "lightning provisioning failed");
@@ -737,9 +836,7 @@ async fn environment_update(state: &AppState, id: Id, caller: Caller, params: Va
         );
     }
 
-    if let Err(e) =
-        signet_db::set_lightning_instances(&state.pool, row.id, &params.components.lightning).await
-    {
+    if let Err(e) = signet_db::set_lightning_instances(&state.pool, row.id, &lightning).await {
         tracing::error!(error = %e, "lightning instance persist failed");
     }
 
@@ -937,6 +1034,52 @@ async fn environment_destroy(state: &AppState, id: Id, caller: Caller, params: V
     }
 
     Response::result(Some(id), serde_json::json!({ "destroyed": true }))
+}
+
+/// Remove one environment's record. Only records whose cluster state is
+/// gone (destroyed or expired) can be deleted; the caller must own it.
+async fn environment_delete(state: &AppState, id: Id, caller: Caller, params: Value) -> Response {
+    let params: IdParams = match serde_json::from_value(params) {
+        Ok(p) => p,
+        Err(e) => return Response::error(Some(id), Error::new(INVALID_PARAMS, e.to_string())),
+    };
+
+    let row = match resolve_environment(state, &caller, &params.id).await {
+        Ok(row) => row,
+        Err(e) => return Response::error(Some(id), e),
+    };
+
+    if row.npub_owner != caller.npub {
+        return Response::error(
+            Some(id),
+            Error::new(FORBIDDEN, "caller is not the environment owner"),
+        );
+    }
+
+    if !matches!(row.status.as_str(), "destroyed" | "expired") {
+        return Response::error(
+            Some(id),
+            Error::new(
+                INVALID_PARAMS,
+                "environment must be destroyed or expired before its record can be deleted",
+            ),
+        );
+    }
+
+    match signet_db::purge_environment(&state.pool, row.id).await {
+        Ok(true) => Response::result(Some(id), serde_json::json!({ "deleted": true })),
+        Ok(false) => Response::error(
+            Some(id),
+            Error::new(INVALID_PARAMS, "environment not found"),
+        ),
+        Err(e) => {
+            tracing::error!(error = %e, "environment delete failed");
+            Response::error(
+                Some(id),
+                Error::new(INTERNAL_ERROR, "environment delete failed"),
+            )
+        }
+    }
 }
 
 async fn environment_faucet(state: &AppState, id: Id, caller: Caller, params: Value) -> Response {

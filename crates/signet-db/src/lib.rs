@@ -45,6 +45,8 @@ pub struct EnvironmentRow {
 pub enum DbError {
     #[error("database: {0}")]
     Sql(#[from] sqlx::Error),
+    #[error("port pool: {0}")]
+    Pool(String),
 }
 
 pub struct NewEnvironment<'a> {
@@ -172,6 +174,7 @@ pub async fn mark_expired_by_short_id(pool: &PgPool, short_id: &str) -> Result<u
 pub struct LightningInstanceRow {
     pub name: String,
     pub implementation: String,
+    pub port: Option<i32>,
 }
 
 /// Replace the lightning instance list for one environment. The create
@@ -179,7 +182,7 @@ pub struct LightningInstanceRow {
 pub async fn set_lightning_instances(
     pool: &PgPool,
     env_id: Uuid,
-    instances: &[signet_core::env::LightningInstance],
+    instances: &[(signet_core::env::LightningInstance, i32)],
 ) -> Result<(), DbError> {
     let mut tx = pool.begin().await.map_err(DbError::from)?;
     sqlx::query("delete from environment_lightning where environment_id = $1")
@@ -187,14 +190,15 @@ pub async fn set_lightning_instances(
         .execute(&mut *tx)
         .await
         .map_err(DbError::from)?;
-    for instance in instances {
+    for (instance, port) in instances {
         sqlx::query(
-            "insert into environment_lightning (environment_id, name, implementation) \
-             values ($1, $2, $3)",
+            "insert into environment_lightning (environment_id, name, implementation, port) \
+             values ($1, $2, $3, $4)",
         )
         .bind(env_id)
         .bind(&instance.name)
         .bind(instance.implementation.as_str())
+        .bind(port)
         .execute(&mut *tx)
         .await
         .map_err(DbError::from)?;
@@ -208,7 +212,7 @@ pub async fn get_lightning_instances(
     env_id: Uuid,
 ) -> Result<Vec<LightningInstanceRow>, DbError> {
     sqlx::query_as::<_, LightningInstanceRow>(
-        "select name, implementation from environment_lightning \
+        "select name, implementation, port from environment_lightning \
          where environment_id = $1 order by name",
     )
     .bind(env_id)
@@ -217,20 +221,184 @@ pub async fn get_lightning_instances(
     .map_err(DbError::from)
 }
 
-// Sequential allocation inside the published electrum port range; the caller
-// rejects allocation past the range top.
-pub async fn next_electrum_port(pool: &PgPool, base: i32) -> Result<i32, DbError> {
-    let max: Option<i32> = sqlx::query_scalar("select max(electrum_port) from environments")
-        .fetch_one(pool)
-        .await
-        .map_err(DbError::from)?;
-    Ok(max.unwrap_or(base - 1) + 1)
+// Ports held by live environments' lightning instances: each instance
+// occupies its REST port and the gRPC port right after it.
+async fn held_lightning_ports(pool: &PgPool) -> Result<Vec<i32>, DbError> {
+    let ports: Vec<i32> = sqlx::query_scalar(
+        "select el.port from environment_lightning el \
+         join environments e on e.id = el.environment_id \
+         where el.port is not null and e.status in ('provisioning', 'ready', 'stopped')",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(DbError::from)?;
+    Ok(ports.into_iter().flat_map(|p| [p, p + 1]).collect())
+}
+
+// The lowest even-aligned port in `[base, max]` whose pair (p, p + 1) is
+// free given `held`.
+fn free_port_pair(base: i32, max: i32, held: &[i32]) -> Option<i32> {
+    let mut p = if base % 2 == 0 { base } else { base + 1 };
+    while p < max {
+        if !held.contains(&p) && !held.contains(&(p + 1)) {
+            return Some(p);
+        }
+        p += 2;
+    }
+    None
+}
+
+/// Allocate one REST/gRPC port pair per requested instance inside the
+/// published lightning range. Ports held by live environments stay
+/// reserved; destroyed and expired environments release theirs.
+pub async fn next_lightning_ports(
+    pool: &PgPool,
+    base: i32,
+    max: i32,
+    pairs: usize,
+) -> Result<Vec<i32>, DbError> {
+    let held = held_lightning_ports(pool).await?;
+    let mut allocated = Vec::with_capacity(pairs);
+    let mut all_held = held;
+    for _ in 0..pairs {
+        match free_port_pair(base, max, &all_held) {
+            Some(p) => {
+                all_held.push(p);
+                all_held.push(p + 1);
+                allocated.push(p);
+            }
+            None => return Err(DbError::Pool("lightning port pool exhausted".into())),
+        }
+    }
+    Ok(allocated)
+}
+
+// Sequential allocation inside the published electrum port range: the
+// lowest port not held by a live environment. Destroyed and expired
+// environments release theirs; stopped ones keep theirs so a start
+// resumes on the same mapping.
+pub async fn next_electrum_port(
+    pool: &PgPool,
+    base: i32,
+    max: i32,
+) -> Result<Option<i32>, DbError> {
+    let held: Vec<i32> = sqlx::query_scalar(
+        "select electrum_port from environments \
+         where electrum_port is not null and status in ('provisioning', 'ready', 'stopped')",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(DbError::from)?;
+    Ok(lowest_free_port(base, max, &held))
+}
+
+/// The lowest port in `[base, max]` absent from `held`, if any.
+fn lowest_free_port(base: i32, max: i32, held: &[i32]) -> Option<i32> {
+    if base > max {
+        return None;
+    }
+    let mut taken = held.to_vec();
+    taken.sort_unstable();
+    taken.dedup();
+    let mut candidate = base;
+    for port in taken {
+        if port < candidate {
+            continue;
+        }
+        if port > candidate {
+            break;
+        }
+        candidate += 1;
+    }
+    (candidate <= max).then_some(candidate)
+}
+
+/// Remove one environment's record. Only records whose cluster state is
+/// already gone (destroyed or expired) qualify; the status guard inside
+/// the statement keeps a live environment safe under a stale caller.
+pub async fn purge_environment(pool: &PgPool, id: Uuid) -> Result<bool, DbError> {
+    let result = sqlx::query(
+        "delete from environments where id = $1 and status in ('destroyed', 'expired')",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(DbError::from)?;
+    Ok(result.rows_affected() > 0)
 }
 
 #[derive(FromRow, Debug, Clone)]
 pub struct ApiTokenRow {
     pub npub_owner: String,
     pub revoked: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{free_port_pair, lowest_free_port};
+
+    #[test]
+    fn empty_pool_starts_at_base() {
+        assert_eq!(lowest_free_port(50002, 50011, &[]), Some(50002));
+    }
+
+    #[test]
+    fn sequential_fill_returns_next_port() {
+        assert_eq!(lowest_free_port(50002, 50011, &[50002, 50003]), Some(50004));
+    }
+
+    #[test]
+    fn freed_low_port_is_reused() {
+        // The regression: max()+1 never gave a released port back, so
+        // destroyed environments permanently consumed the range.
+        assert_eq!(lowest_free_port(50002, 50011, &[50003, 50004]), Some(50002));
+    }
+
+    #[test]
+    fn middle_gap_is_filled_first() {
+        assert_eq!(lowest_free_port(50002, 50011, &[50002, 50004]), Some(50003));
+    }
+
+    #[test]
+    fn exhausted_range_is_none() {
+        assert_eq!(lowest_free_port(50002, 50004, &[50002, 50003, 50004]), None);
+    }
+
+    #[test]
+    fn single_port_range() {
+        assert_eq!(lowest_free_port(7, 7, &[]), Some(7));
+        assert_eq!(lowest_free_port(7, 7, &[7]), None);
+    }
+
+    #[test]
+    fn pairs_start_at_base_when_empty() {
+        assert_eq!(free_port_pair(21000, 22199, &[]), Some(21000));
+    }
+
+    #[test]
+    fn pairs_are_even_aligned_and_contiguous() {
+        // 21000 taken: the next pair starts at 21002, never straddling.
+        assert_eq!(free_port_pair(21000, 22199, &[21000, 21001]), Some(21002));
+    }
+
+    #[test]
+    fn freed_pairs_are_reused() {
+        assert_eq!(free_port_pair(21000, 22199, &[21002, 21003]), Some(21000));
+    }
+
+    #[test]
+    fn a_straddling_port_blocks_both_pairs() {
+        // 21001 held: pair (21000, 21001) collides, pair (21002, 21003) fits.
+        assert_eq!(free_port_pair(21000, 22199, &[21001]), Some(21002));
+    }
+
+    #[test]
+    fn exhausted_pair_range_is_none() {
+        assert_eq!(
+            free_port_pair(21000, 21003, &[21000, 21001, 21002, 21003]),
+            None
+        );
+    }
 }
 
 pub async fn insert_api_token(

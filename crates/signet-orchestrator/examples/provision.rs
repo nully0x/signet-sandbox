@@ -51,18 +51,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let explorer = components.explorer;
             let lightning_count = components.lightning.len();
             orchestrator
-                .create_environment(
-                    &env_id,
-                    &secrets,
-                    &signet_orchestrator::resolve_images(
+                .create_environment(&signet_orchestrator::ProvisionParams {
+                    env_id: &env_id,
+                    secrets: &secrets,
+                    images: &signet_orchestrator::resolve_images(
                         &signet_core::versions::VersionCatalog::embedded(),
                         &None,
                     )
                     .unwrap(),
                     components,
-                    None,
+                    electrum_port: None,
+                    lightning: &[],
                     expires_at,
-                )
+                })
                 .await?;
             println!(
                 "created env-{env_id} challenge={challenge} indexer={} faucet={} explorer={} lightning={} ttl={:?}",

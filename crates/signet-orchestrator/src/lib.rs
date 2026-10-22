@@ -20,7 +20,6 @@ const FAUCET_MANIFEST: &str = include_str!("../templates/faucet.yaml");
 const LND_MANIFEST: &str = include_str!("../templates/lnd.yaml");
 const LND_MACAROON_PATH: &str = "/root/.lnd/data/chain/bitcoin/signet/admin.macaroon";
 const LND_TLS_CERT_PATH: &str = "/root/.lnd/tls.cert";
-const LND_WALLET_DB_PATH: &str = "/root/.lnd/data/chain/bitcoin/signet/wallet.db";
 const LND_WALLET_PASSWORD_KEY: &str = "LND_WALLET_PASSWORD";
 const ELECTRS_MANIFEST: &str = include_str!("../templates/electrs.yaml");
 const EXPLORER_MANIFEST: &str = include_str!("../templates/explorer.yaml");
@@ -36,10 +35,20 @@ pub const EXPIRES_AT_ANNOTATION: &str = "signet.sandbox/expires-at";
 
 const GATEWAY_NAME: &str = "signet-eg";
 const GATEWAY_NAMESPACE: &str = "signet-platform";
-// Per-env electrs TCP ports. The local k3d cluster publishes a
-// narrow window; hosted clusters publish the full 50002-50502 range.
-pub const ELECTRUM_PORT_BASE: i32 = 50002;
-pub const ELECTRUM_PORT_MAX: i32 = 50011;
+// Per-env electrs TCP ports. The pool sits BELOW the ephemeral port
+// range (32768-60999): inside it, any host service can permanently
+// occupy a port and break every cluster port mapping. Keep the window
+// in sync with the k3d port maps (justfile cluster-up, signet-cli
+// local.rs) — the k3d load balancer fails on multi-thousand-port maps.
+pub const ELECTRUM_PORT_BASE: i32 = 20000;
+pub const ELECTRUM_PORT_MAX: i32 = 20599;
+
+// Per-instance lightning TCP ports: REST on the port, gRPC on port + 1
+// (one port pair per LND instance, allocated from the same window,
+// above the electrs range). Mapped by k3d at cluster create like the
+// electrs window.
+pub const LIGHTNING_PORT_BASE: i32 = 21000;
+pub const LIGHTNING_PORT_MAX: i32 = 21199;
 
 const DEFAULT_SIGNER_IMAGE: &str = "signet-signer:dev";
 
@@ -248,6 +257,12 @@ pub fn namespace_for(env_id: &str) -> String {
     format!("env-{env_id}")
 }
 
+/// The lnd instance runs as a StatefulSet, so its pod name is stable.
+/// All exec traffic (wallet init, file reads) targets this name.
+fn lnd_pod_name(instance: &str) -> String {
+    format!("lnd-{instance}-0")
+}
+
 fn namespace_object(env_id: &str, expires_at: Option<DateTime<Utc>>) -> Namespace {
     let mut metadata = ObjectMeta {
         name: Some(namespace_for(env_id)),
@@ -355,6 +370,12 @@ fn explorer_hostname(env_host: &str, env_id: &str) -> String {
     format!("env-{env_id}.{env_host}")
 }
 
+// One instance's manifest with its name substituted; the public host
+// placeholder is filled in by the caller at apply time.
+fn lnd_manifest(instance: &LightningInstance) -> String {
+    LND_MANIFEST.replace("LND_NAME", &instance.name)
+}
+
 // `--env-host` accepts `[scheme://]host`; a bare host rides plain HTTP.
 fn split_url_base(base: &str) -> (String, String) {
     match base.split_once("://") {
@@ -422,19 +443,35 @@ fn route_document(hostname: &str) -> Result<DynamicObject, OrchestrateError> {
     Ok(serde_yaml::from_value(value)?)
 }
 
+/// Everything one environment's provisioning needs, in one place.
+pub struct ProvisionParams<'a> {
+    pub env_id: &'a str,
+    pub secrets: &'a EnvSecrets,
+    pub images: &'a BTreeMap<String, String>,
+    pub components: EnvComponents,
+    pub electrum_port: Option<u16>,
+    pub lightning: &'a [(LightningInstance, i32)],
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Clone)]
 pub struct Orchestrator {
     client: Client,
     env_host: String,
+    /// Host part of env_host (no scheme, no port): the name lightning
+    /// endpoint URLs use, and the cert SAN when it is an IP or domain.
+    ln_host: String,
     url_scheme: String,
 }
 
 impl Orchestrator {
     pub async fn connect(env_host: &str) -> Result<Self, OrchestrateError> {
         let (url_scheme, host) = split_url_base(env_host);
+        let ln_host = host.split(':').next().unwrap_or_default().to_string();
         Ok(Self {
             client: Client::try_default().await?,
             env_host: host,
+            ln_host,
             url_scheme,
         })
     }
@@ -449,18 +486,14 @@ impl Orchestrator {
 
     pub async fn create_environment(
         &self,
-        env_id: &str,
-        secrets: &EnvSecrets,
-        images: &BTreeMap<String, String>,
-        components: EnvComponents,
-        electrum_port: Option<u16>,
-        expires_at: Option<DateTime<Utc>>,
+        params: &ProvisionParams<'_>,
     ) -> Result<(), OrchestrateError> {
+        let env_id = params.env_id;
         let ns = namespace_for(env_id);
 
         self.ensure_gateway().await?;
 
-        let namespace = namespace_object(env_id, expires_at);
+        let namespace = namespace_object(env_id, params.expires_at);
         Api::<Namespace>::all(self.client.clone())
             .create(&PostParams::default(), &namespace)
             .await?;
@@ -472,28 +505,40 @@ impl Orchestrator {
                 ..Default::default()
             },
             string_data: Some(BTreeMap::from([
-                ("SIGNER_KEY_WIF".to_string(), secrets.signer_wif.clone()),
-                ("SIGNER_PUBKEY".to_string(), secrets.signer_pubkey.clone()),
+                (
+                    "SIGNER_KEY_WIF".to_string(),
+                    params.secrets.signer_wif.clone(),
+                ),
+                (
+                    "SIGNER_PUBKEY".to_string(),
+                    params.secrets.signer_pubkey.clone(),
+                ),
                 (
                     "SIGNET_CHALLENGE".to_string(),
-                    secrets.signet_challenge.clone(),
+                    params.secrets.signet_challenge.clone(),
                 ),
-                ("BITCOIN_RPC_USER".to_string(), secrets.rpc_user.clone()),
+                (
+                    "BITCOIN_RPC_USER".to_string(),
+                    params.secrets.rpc_user.clone(),
+                ),
                 (
                     "BITCOIN_RPC_PASSWORD".to_string(),
-                    secrets.rpc_password.clone(),
+                    params.secrets.rpc_password.clone(),
                 ),
                 (
                     "BITCOIN_RPC_COOKIE".to_string(),
-                    format!("{}:{}", secrets.rpc_user, secrets.rpc_password),
+                    format!(
+                        "{}:{}",
+                        params.secrets.rpc_user, params.secrets.rpc_password
+                    ),
                 ),
                 (
                     "LND_WALLET_PASSWORD".to_string(),
-                    secrets.lnd_wallet_password.clone(),
+                    params.secrets.lnd_wallet_password.clone(),
                 ),
                 (
                     "SIGNET_MAGIC".to_string(),
-                    signet_magic(&secrets.signet_challenge)?,
+                    signet_magic(&params.secrets.signet_challenge)?,
                 ),
             ])),
             ..Default::default()
@@ -502,195 +547,115 @@ impl Orchestrator {
             .create(&PostParams::default(), &secret)
             .await?;
 
-        self.apply_manifest(&ns, BITCOIND_MANIFEST, images).await?;
-        self.apply_manifest(&ns, SIGNER_MANIFEST, images).await?;
-        for spec in selected_specs(&components) {
-            self.apply_manifest(&ns, spec.manifest, images).await?;
-        }
-        for instance in &components.lightning {
-            self.apply_lnd(&ns, instance, images).await?;
-        }
-        // Wallet init is synchronous: an environment leaves provisioning
-        // fully operational, lightning included. lncli needs a tty, so
-        // the init runs through an exec with one attached.
-        for instance in &components.lightning {
-            self.init_wallet(env_id, &instance.name, &secrets.lnd_wallet_password)
+        self.apply_manifest(&ns, BITCOIND_MANIFEST, params.images)
+            .await?;
+        self.apply_manifest(&ns, SIGNER_MANIFEST, params.images)
+            .await?;
+        for spec in selected_specs(&params.components) {
+            self.apply_manifest(&ns, spec.manifest, params.images)
                 .await?;
         }
-        if components.explorer {
+        for (instance, rest_port) in params.lightning {
+            self.apply_lnd(&ns, instance, params.images, *rest_port, &self.ln_host)
+                .await?;
+        }
+        // lnd self-bootstraps: with --noseedbackup it creates and
+        // unlocks its wallet on boot. Provisioning never waits for it —
+        // connection bundles carry an instance only once its wallet
+        // answers, and clients poll for that when they need lightning.
+        if params.components.explorer {
             self.apply_explorer_route(&ns, env_id).await?;
         }
-        if let Some(port) = electrum_port {
+        if let Some(port) = params.electrum_port {
             self.apply_electrs_lb(&ns, port).await?;
         }
-        if components.explorer || electrum_port.is_some() {
+        if params.components.explorer || params.electrum_port.is_some() {
             self.ensure_route_grant(&ns).await?;
         }
         Ok(())
     }
 
-    /// Apply one Lightning instance's manifest. The template's LND_NAME
-    /// placeholder carries the instance name into every resource; the
-    /// container image comes from the resolved versions map.
+    /// Apply one Lightning instance's manifest and LoadBalancer service.
+    /// The template's LND_NAME placeholder carries the instance name,
+    /// LND_EXTRA_HOST the deployment's public host (IP or domain — baked
+    /// into the TLS cert so remote clients verify it), and the container
+    /// image comes from the resolved versions map.
     async fn apply_lnd(
         &self,
         ns: &str,
         instance: &LightningInstance,
         images: &BTreeMap<String, String>,
+        rest_port: i32,
+        extra_host: &str,
     ) -> Result<(), OrchestrateError> {
-        let manifest = LND_MANIFEST.replace("LND_NAME", &instance.name);
-        self.apply_manifest(ns, &manifest, images).await
+        let env = [("LND_EXTRA_HOST", extra_host)];
+        let mut manifest = lnd_manifest(instance);
+        for (placeholder, value) in env {
+            manifest = manifest.replace(placeholder, value);
+        }
+        self.apply_manifest(ns, &manifest, images).await?;
+        self.apply_lnd_lb(ns, instance, rest_port).await
     }
 
-    /// Create or unlock one instance's wallet. lncli masks passwords
-    /// through the terminal and refuses piped stdin, so the exec runs
-    /// with an allocated tty and the password goes in over it.
-    async fn init_wallet(
+    /// REST + gRPC exposure for one instance: a LoadBalancer service
+    /// (klipper binds it on the node; the local k3d cluster publishes the
+    /// same host ports) whose two ports land on the lnd listeners.
+    async fn apply_lnd_lb(
         &self,
-        env_id: &str,
-        instance: &str,
-        password: &str,
+        ns: &str,
+        instance: &LightningInstance,
+        rest_port: i32,
     ) -> Result<(), OrchestrateError> {
-        // lnd must be up: its boot writes the tls cert the exec needs.
-        let mut booted = false;
-        for _ in 0..30 {
-            if self
-                .read_pod_file(env_id, instance, LND_TLS_CERT_PATH)
-                .await
-                .is_ok()
-            {
-                booted = true;
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        }
-        if !booted {
-            return Err(OrchestrateError::Exec(format!(
-                "lnd-{instance} did not become ready in time"
-            )));
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-
-        let wallet_db = LND_WALLET_DB_PATH;
-        let wallet_exists = self.pod_file_exists(env_id, instance, wallet_db).await?;
-        // create prompts for the password twice, then asks whether to
-        // restore an existing seed — answered "n" to generate one.
-        let (cmd, input) = if wallet_exists {
-            (
-                vec!["lncli", "--network=signet", "unlock"],
-                format!("{password}\n"),
-            )
-        } else {
-            (
-                vec!["lncli", "--network=signet", "create"],
-                format!("{password}\n{password}\nn\n"),
-            )
+        let svc = Service {
+            metadata: ObjectMeta {
+                name: Some(format!("lnd-lb-{}", instance.name)),
+                namespace: Some(ns.to_string()),
+                ..Default::default()
+            },
+            spec: Some(k8s_openapi::api::core::v1::ServiceSpec {
+                type_: Some("LoadBalancer".to_string()),
+                selector: Some(BTreeMap::from([(
+                    "app".to_string(),
+                    format!("lnd-{}", instance.name),
+                )])),
+                ports: Some(vec![
+                    k8s_openapi::api::core::v1::ServicePort {
+                        name: Some("rest".to_string()),
+                        port: rest_port,
+                        target_port: Some(
+                            k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(8080),
+                        ),
+                        protocol: Some("TCP".to_string()),
+                        ..Default::default()
+                    },
+                    k8s_openapi::api::core::v1::ServicePort {
+                        name: Some("grpc".to_string()),
+                        port: rest_port + 1,
+                        target_port: Some(
+                            k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(10009),
+                        ),
+                        protocol: Some("TCP".to_string()),
+                        ..Default::default()
+                    },
+                ]),
+                ..Default::default()
+            }),
+            status: None,
         };
-        let (output, success) = self.exec_with_stdin(env_id, instance, &cmd, &input).await?;
-        if !success {
-            return Err(OrchestrateError::Exec(format!(
-                "lnd-{instance} wallet {} failed: {}",
-                if wallet_exists { "unlock" } else { "create" },
-                output.trim()
-            )));
-        }
-
-        // The wallet database is the proof for a fresh init: lnd
-        // pre-creates macaroon files before the wallet exists.
-        if !wallet_exists {
-            for _ in 0..15 {
-                if self.pod_file_exists(env_id, instance, wallet_db).await? {
-                    return Ok(());
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            }
-            return Err(OrchestrateError::Exec(format!(
-                "lnd-{instance} wallet did not initialize"
-            )));
-        }
+        Api::<Service>::namespaced(self.client.clone(), ns)
+            .create(&PostParams::default(), &svc)
+            .await?;
         Ok(())
     }
 
-    /// Run a command in the instance's pod with a tty and stdin text.
-    /// Returns the merged output and the process exit status.
-    async fn exec_with_stdin(
-        &self,
-        env_id: &str,
-        instance: &str,
-        cmd: &[&str],
-        input: &str,
-    ) -> Result<(String, bool), OrchestrateError> {
-        let ns = namespace_for(env_id);
-        let pods: Api<Pod> = Api::namespaced(self.client.clone(), &ns);
-        let ap = AttachParams {
-            stdin: true,
-            stdout: true,
-            // k8s merges stderr into stdout when a tty is allocated.
-            stderr: false,
-            tty: true,
-            max_stdout_buf_size: Some(64 * 1024),
-            ..Default::default()
-        };
-        let mut attached = pods
-            .exec(&format!("lnd-{instance}"), cmd.to_vec(), &ap)
-            .await?;
-        {
-            let mut stdin = attached
-                .stdin()
-                .ok_or_else(|| OrchestrateError::Exec("no stdin".to_string()))?;
-            use tokio::io::AsyncWriteExt;
-            stdin
-                .write_all(input.as_bytes())
-                .await
-                .map_err(|e| OrchestrateError::Exec(e.to_string()))?;
-            stdin
-                .shutdown()
-                .await
-                .map_err(|e| OrchestrateError::Exec(e.to_string()))?;
-        }
-        let mut stdout = attached
-            .stdout()
-            .ok_or_else(|| OrchestrateError::Exec("no stdout".to_string()))?;
-        let mut buf = Vec::new();
-        tokio::io::AsyncReadExt::read_to_end(&mut stdout, &mut buf)
-            .await
-            .map_err(|e| OrchestrateError::Exec(e.to_string()))?;
-        let success = match attached.take_status() {
-            Some(fut) => fut.await.and_then(|s| s.status).as_deref() == Some("Success"),
-            None => false,
-        };
-        Ok((String::from_utf8_lossy(&buf).into_owned(), success))
+    /// Public REST + gRPC addresses of one instance: the deployment's
+    /// public host and the instance's LoadBalancer ports.
+    pub fn lightning_rest_url(&self, rest_port: i32) -> String {
+        format!("https://{}:{rest_port}", self.ln_host)
     }
 
-    /// Whether a path exists inside the instance's pod.
-    async fn pod_file_exists(
-        &self,
-        env_id: &str,
-        instance: &str,
-        path: &str,
-    ) -> Result<bool, OrchestrateError> {
-        let ns = namespace_for(env_id);
-        let pods: Api<Pod> = Api::namespaced(self.client.clone(), &ns);
-        let mut attached = pods
-            .exec(
-                &format!("lnd-{instance}"),
-                vec!["ls", path],
-                &AttachParams::default(),
-            )
-            .await?;
-        match attached.take_status() {
-            Some(fut) => {
-                let status = fut.await;
-                Ok(status.and_then(|s| s.status).as_deref() == Some("Success"))
-            }
-            None => Ok(false),
-        }
-    }
-
-    /// In-cluster REST address of one Lightning instance. Reachable from
-    /// inside the cluster; from a host, use `kubectl port-forward`.
-    pub fn lightning_rest_url(&self, env_id: &str, instance: &str) -> String {
-        format!("https://lnd-{instance}.{}.svc:8080", namespace_for(env_id))
+    pub fn lightning_grpc_url(&self, rest_port: i32) -> String {
+        format!("https://{}:{}", self.ln_host, rest_port + 1)
     }
 
     /// Read one file out of an instance's pod via exec.
@@ -702,14 +667,13 @@ impl Orchestrator {
     ) -> Result<Vec<u8>, OrchestrateError> {
         let ns = namespace_for(env_id);
         let pods: Api<Pod> = Api::namespaced(self.client.clone(), &ns);
-        let attached = pods
+        let mut attached = pods
             .exec(
-                &format!("lnd-{instance}"),
+                &lnd_pod_name(instance),
                 vec!["cat", path],
                 &AttachParams::default(),
             )
             .await?;
-        let mut attached = attached;
         let mut stdout = attached
             .stdout()
             .ok_or_else(|| OrchestrateError::Exec("no stdout".to_string()))?;
@@ -717,6 +681,18 @@ impl Orchestrator {
         tokio::io::AsyncReadExt::read_to_end(&mut stdout, &mut buf)
             .await
             .map_err(|e| OrchestrateError::Exec(e.to_string()))?;
+        // `cat` exits non-zero when the file is missing; callers read the
+        // error as "not ready yet", so a failed exec must not return bytes.
+        let success = match attached.take_status() {
+            Some(fut) => fut.await.and_then(|s| s.status).as_deref() == Some("Success"),
+            None => false,
+        };
+        if !success {
+            return Err(OrchestrateError::Exec(format!(
+                "cat {path} in {} failed",
+                lnd_pod_name(instance)
+            )));
+        }
         Ok(buf)
     }
 
@@ -755,16 +731,15 @@ impl Orchestrator {
     pub async fn add_lightning_instances(
         &self,
         env_id: &str,
-        instances: &[LightningInstance],
+        instances: &[(LightningInstance, i32)],
         images: &BTreeMap<String, String>,
         lnd_wallet_password: &str,
     ) -> Result<(), OrchestrateError> {
         let ns = namespace_for(env_id);
         self.ensure_lnd_wallet_password(&ns, lnd_wallet_password)
             .await?;
-        for instance in instances {
-            self.apply_lnd(&ns, instance, images).await?;
-            self.init_wallet(env_id, &instance.name, lnd_wallet_password)
+        for (instance, rest_port) in instances {
+            self.apply_lnd(&ns, instance, images, *rest_port, &self.ln_host)
                 .await?;
         }
         Ok(())
@@ -1061,14 +1036,11 @@ pub struct ManifestProbe {
 
 #[cfg(test)]
 mod tests {
+    use signet_core::env::LightningImplementation;
+
     #[test]
-    fn lnd_manifest_substitutes_the_instance_name() {
-        let manifest = LND_MANIFEST.replace("LND_NAME", "ln-alice");
-        assert!(!manifest.contains("LND_NAME"), "placeholder must be gone");
-        assert!(manifest.contains("lnd-ln-alice"));
-        let docs = Orchestrator::parse_docs(&manifest).unwrap();
-        let kinds: Vec<&str> = docs.iter().map(|v| v["kind"].as_str().unwrap()).collect();
-        assert_eq!(kinds, ["Service", "Deployment", "PersistentVolumeClaim"]);
+    fn lnd_exec_targets_the_statefulset_pod() {
+        assert_eq!(lnd_pod_name("ln-alice"), "lnd-ln-alice-0");
     }
 
     use super::*;

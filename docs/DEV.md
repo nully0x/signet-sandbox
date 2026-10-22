@@ -196,6 +196,31 @@ cargo run -p signet-orchestrator --example provision -- ready <env-id>
 cargo run -p signet-orchestrator --example provision -- destroy <env-id>
 ```
 
+## Lightning endpoints and DNS
+
+Every LND instance is reachable by port, not by name: the instance's
+LoadBalancer service exposes REST and gRPC on two ports from the
+lightning range (21000-21199 — REST on the even port, gRPC on odd),
+mapped onto the host by k3d like the electrs range. The bundle carries
+the concrete URLs:
+
+```text
+rest  https://localhost:21000      (on the cluster machine)
+grpc  https://localhost:21001
+rest  https://192.168.100.2:21000  (from any machine — LND's certificate
+                                    includes the deployment IP from
+                                    SIGNET_ENV_HOST)
+```
+
+No DNS is involved: LND's default certificate covers `localhost` and
+`127.0.0.1`, and `SIGNET_ENV_HOST` set to the deployment's IP or domain
+is baked in via `--tlsextraip`/`--tlsextradomain` for remote clients.
+Clients verify with the bundle's `tls_cert` and authenticate with the
+macaroon (REST: `Grpc-Metadata-macaroon` header; gRPC: macaroon + cert).
+
+Deployments that prefer names can still front the ports with wildcard
+DNS or a reverse proxy — signet does not require it.
+
 ## Reaper
 
 The API binary runs the TTL reaper in the background: every pass it deletes
