@@ -722,7 +722,7 @@ mod tests {
                 "Deployment"
             ]
         );
-        assert!(LOCAL_STACK_MANIFEST.contains("REGISTRY_PLACEHOLDER/signet-api"));
+        assert!(LOCAL_STACK_MANIFEST.contains("image: signet-api:latest"));
         assert!(LOCAL_STACK_MANIFEST.contains("localhost:8081"));
     }
 }

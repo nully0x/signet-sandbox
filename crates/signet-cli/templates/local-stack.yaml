@@ -120,7 +120,9 @@ spec:
       serviceAccountName: signet-api
       containers:
         - name: api
-          image: REGISTRY_PLACEHOLDER/signet-api:latest
+          # the local stack runs the locally built api (imported into the
+          # node by ensure_images), not the published registry image
+          image: signet-api:latest
           imagePullPolicy: IfNotPresent
           env:
             - { name: DATABASE_URL, value: postgres://signet:signet@postgres:5432/signet }
