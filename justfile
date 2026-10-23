@@ -99,15 +99,15 @@ e2e name="smoke-e2e" api="http://localhost:8082":
     echo "grpc url: $grpc_url"
     # the wallet files land a moment before the RPC accepts calls; retry
     rest_ok=1
-    for attempt in 1 2 3 4 5; do
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
         if curl -sk --max-time 10 "$rest_url/v1/getinfo" \
             -H "Grpc-Metadata-macaroon: $macaroon" | jq -e '.identity_pubkey' >/dev/null; then
             rest_ok=0
             echo "lnd REST reachable: $rest_url"
             break
         fi
-        [ "$attempt" = 5 ] && continue
-        sleep 2
+        [ "$attempt" = 10 ] && continue
+        sleep 3
     done
     [ "$rest_ok" = 0 ] || { echo "lnd REST not reachable: $rest_url"; exit 1; }
     grpc_host=${grpc_url#https://}
