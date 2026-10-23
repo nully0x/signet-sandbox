@@ -85,6 +85,11 @@ enum Command {
         /// Open the dashboard in a browser once the environment is ready
         #[arg(long)]
         ui: bool,
+        /// Host advertised in endpoint URLs when the stack gets
+        /// bootstrapped (IP or domain); defaults to localhost, which
+        /// limits endpoints to this machine
+        #[arg(long, default_value = "localhost")]
+        host: String,
         #[command(flatten)]
         common: Common,
     },
@@ -161,7 +166,12 @@ enum Command {
     /// Print the JSON Schema for the environment config
     Schema {},
     /// Create or start the local cluster and its platform stack
-    Bootstrap,
+    Bootstrap {
+        /// Host advertised in endpoint URLs (IP or domain); defaults to
+        /// localhost, which limits endpoints to this machine
+        #[arg(long, default_value = "localhost")]
+        host: String,
+    },
     /// Report the local platform, api, and identity state
     Status,
     /// Delete the local cluster (environments go with it; the profile is kept)
@@ -198,8 +208,20 @@ fn run(command: Command) -> u8 {
             timeout_secs,
             poll_secs,
             ui,
+            host,
             common,
-        } => up(config, name, ttl, timeout_secs, poll_secs, ui, &common),
+        } => up(
+            &UpOptions {
+                config,
+                name,
+                ttl,
+                timeout_secs,
+                poll_secs,
+                ui,
+                host,
+            },
+            &common,
+        ),
         Command::Get { env, common } => get(&env, &common),
         Command::Ls { common } => ls(&common),
         Command::Stop { env, common } => lifecycle("environment.stop", &env, &common),
@@ -214,7 +236,7 @@ fn run(command: Command) -> u8 {
         Command::Delete { env, common } => delete(&env, &common),
         Command::Token { nsec, api, json } => token(nsec, &api, json),
         Command::Schema {} => schema(),
-        Command::Bootstrap => local::bootstrap().map_err(CliError::from),
+        Command::Bootstrap { host } => local::bootstrap(&host).map_err(CliError::from),
         Command::Status => local::status().map_err(CliError::from),
         Command::Teardown => local::teardown().map_err(CliError::from),
     };
@@ -247,14 +269,24 @@ fn client(common: &Common) -> anyhow::Result<Client> {
 /// `up` is the auto-bootstrap entry point: when the default local
 /// api is not running, bring the whole local stack up first. A custom
 /// `--api` that is down stays a hard error.
-fn ensure_local_api(common: &Common) -> Result<(), CliError> {
+struct UpOptions {
+    config: Option<PathBuf>,
+    name: Option<String>,
+    ttl: Option<String>,
+    timeout_secs: u64,
+    poll_secs: u64,
+    ui: bool,
+    host: String,
+}
+
+fn ensure_local_api(common: &Common, host: &str) -> Result<(), CliError> {
     let reachable = local::api_healthy(&common.api);
     if local::should_bootstrap(&common.api, reachable) {
         println!(
             "no local api on {} — bootstrapping the local cluster",
             local::DEFAULT_LOCAL_API
         );
-        return local::bootstrap().map_err(CliError::from);
+        return local::bootstrap(host).map_err(CliError::from);
     }
     if !reachable {
         return Err(CliError::Other(anyhow::anyhow!(
@@ -265,16 +297,24 @@ fn ensure_local_api(common: &Common) -> Result<(), CliError> {
     Ok(())
 }
 
-fn up(
-    config_path: Option<PathBuf>,
-    name: Option<String>,
-    ttl: Option<String>,
-    timeout_secs: u64,
-    poll_secs: u64,
-    ui: bool,
-    common: &Common,
-) -> Result<(), CliError> {
-    ensure_local_api(common)?;
+fn up(opts: &UpOptions, common: &Common) -> Result<(), CliError> {
+    let UpOptions {
+        config,
+        name,
+        ttl,
+        timeout_secs,
+        poll_secs,
+        ui,
+        host,
+    } = opts;
+    let timeout_secs = *timeout_secs;
+    let poll_secs = *poll_secs;
+    let ui = *ui;
+    let host = host.as_str();
+    let config_path = config.clone();
+    let name = name.clone();
+    let ttl = ttl.clone();
+    ensure_local_api(common, host)?;
     let client = match heal_stale_token(common)? {
         Some(client) => client,
         None => client(common)?,
@@ -648,7 +688,18 @@ mod tests {
             nsec: None,
             json: false,
         };
-        let result = up(None, Some("cli-test".into()), None, 10, 0, false, &common);
+        let result = up(
+            &UpOptions {
+                config: None,
+                name: Some("cli-test".into()),
+                ttl: None,
+                timeout_secs: 10,
+                poll_secs: 0,
+                ui: false,
+                host: "localhost".into(),
+            },
+            &common,
+        );
         if let Err(e) = &result {
             eprintln!("up error: {e:?}");
         }
@@ -668,7 +719,21 @@ mod tests {
             nsec: None,
             json: false,
         };
-        assert!(up(None, Some("cli-test".into()), None, 10, 0, false, &common).is_err());
+        assert!(
+            up(
+                &UpOptions {
+                    config: None,
+                    name: Some("cli-test".into()),
+                    ttl: None,
+                    timeout_secs: 10,
+                    poll_secs: 0,
+                    ui: false,
+                    host: "localhost".into(),
+                },
+                &common,
+            )
+            .is_err()
+        );
     }
 
     #[test]

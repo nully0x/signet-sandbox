@@ -80,7 +80,7 @@ spec:
                   name: signet-secrets
                   key: LND_WALLET_PASSWORD
             - name: LND_EXTRA_HOST
-              value: LND_EXTRA_HOST
+              value: EXTRA_HOST_PLACEHOLDER
           ports:
             - name: rest
               containerPort: 8080

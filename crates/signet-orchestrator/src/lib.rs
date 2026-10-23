@@ -577,7 +577,7 @@ impl Orchestrator {
 
     /// Apply one Lightning instance's manifest and LoadBalancer service.
     /// The template's LND_NAME placeholder carries the instance name,
-    /// LND_EXTRA_HOST the deployment's public host (IP or domain — baked
+    /// EXTRA_HOST_PLACEHOLDER the deployment's public host (IP or domain — baked
     /// into the TLS cert so remote clients verify it), and the container
     /// image comes from the resolved versions map.
     async fn apply_lnd(
@@ -588,7 +588,7 @@ impl Orchestrator {
         rest_port: i32,
         extra_host: &str,
     ) -> Result<(), OrchestrateError> {
-        let env = [("LND_EXTRA_HOST", extra_host)];
+        let env = [("EXTRA_HOST_PLACEHOLDER", extra_host)];
         let mut manifest = lnd_manifest(instance);
         for (placeholder, value) in env {
             manifest = manifest.replace(placeholder, value);
@@ -1037,6 +1037,23 @@ pub struct ManifestProbe {
 #[cfg(test)]
 mod tests {
     use signet_core::env::LightningImplementation;
+
+    #[test]
+    fn lnd_manifest_substitutes_the_host_without_touching_the_env_name() {
+        // The regression: substituting a placeholder that collided with
+        // the env var name corrupted the script's $LND_EXTRA_HOST
+        // reference (the shell ate "$1" out of the address).
+        let manifest = lnd_manifest(&LightningInstance {
+            name: "ln-smoke".to_string(),
+            implementation: LightningImplementation::Lnd,
+        })
+        .replace("EXTRA_HOST_PLACEHOLDER", "192.168.100.2");
+        assert!(manifest.contains("name: LND_EXTRA_HOST"));
+        assert!(manifest.contains("value: 192.168.100.2"));
+        assert!(manifest.contains("--tlsextraip=$LND_EXTRA_HOST"));
+        assert!(!manifest.contains("EXTRA_HOST_PLACEHOLDER"));
+        assert!(!manifest.contains("$192"));
+    }
 
     #[test]
     fn lnd_exec_targets_the_statefulset_pod() {

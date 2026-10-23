@@ -62,12 +62,12 @@ fn full_image(registry: &str, name: &str) -> String {
 
 const NODE_READY_TIMEOUT_SECS: u64 = 180;
 
-pub fn bootstrap() -> anyhow::Result<()> {
+pub fn bootstrap(host: &str) -> anyhow::Result<()> {
     let bin = ensure_prerequisites()?;
     ensure_cluster(&bin)?;
     ensure_images()?;
     install_gateway(bin.as_path())?;
-    deploy_local_stack(bin.as_path())?;
+    deploy_local_stack(bin.as_path(), host)?;
     wait_api()?;
     let profile = crate::profile::ensure_with(
         &crate::profile::path()?,
@@ -510,9 +510,19 @@ fn ctr_quiet(node: &str, args: &[&str]) -> anyhow::Result<()> {
 /// Apply the postgres + api stack and wait for both rollouts. The registry
 /// placeholder is substituted so forks can point SIGNET_IMAGE_REGISTRY at
 /// their own ghcr namespace.
-fn deploy_local_stack(bin: &Path) -> anyhow::Result<()> {
+/// Render the stack manifest for the host the api should advertise:
+/// endpoint URLs and node certificates are built from this host, so
+/// remote clients resolve/connect against it.
+fn render_local_stack(host: &str) -> anyhow::Result<String> {
+    Ok(LOCAL_STACK_MANIFEST
+        .replace("REGISTRY_PLACEHOLDER", &registry())
+        .replace("API_PUBLIC_PLACEHOLDER", &format!("http://{host}:8081"))
+        .replace("ENV_HOST_PLACEHOLDER", &format!("http://{host}")))
+}
+
+fn deploy_local_stack(bin: &Path, host: &str) -> anyhow::Result<()> {
     println!("deploying postgres + provisioning api");
-    let manifest = LOCAL_STACK_MANIFEST.replace("REGISTRY_PLACEHOLDER", &registry());
+    let manifest = render_local_stack(host)?;
     write_stdin_manifest(bin, &manifest)?;
     run(kubectl(bin)?.args([
         "-n",

@@ -127,8 +127,8 @@ spec:
           env:
             - { name: DATABASE_URL, value: postgres://signet:signet@postgres:5432/signet }
             - { name: SIGNET_API_LISTEN, value: 0.0.0.0:8081 }
-            - { name: SIGNET_API_PUBLIC_URL, value: http://localhost:8081 }
-            - { name: SIGNET_ENV_HOST, value: http://localhost }
+            - { name: SIGNET_API_PUBLIC_URL, value: API_PUBLIC_PLACEHOLDER }
+            - { name: SIGNET_ENV_HOST, value: ENV_HOST_PLACEHOLDER }
           ports:
             - { containerPort: 8081 }
           readinessProbe:
