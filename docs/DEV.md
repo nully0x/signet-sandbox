@@ -212,6 +212,11 @@ rest  https://192.168.100.2:21000  (from any machine — LND's certificate
                                     SIGNET_ENV_HOST)
 ```
 
+The CLI seeds the same value at stack bootstrap: `signet bootstrap --host
+<ip-or-domain>` (or `signet up --host …` when the bootstrap fires). On an
+already running stack the flag is a no-op and the CLI prints a note —
+re-run `signet bootstrap --host …` to change the advertised host live.
+
 No DNS is involved: LND's default certificate covers `localhost` and
 `127.0.0.1`, and `SIGNET_ENV_HOST` set to the deployment's IP or domain
 is baked in via `--tlsextraip`/`--tlsextradomain` for remote clients.

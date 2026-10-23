@@ -49,7 +49,10 @@ Endpoints are `localhost` + port by default — everything on the machine
 running the sandbox, no DNS involved.
 
 For clients on other machines, set `SIGNET_ENV_HOST` on the API to the
-sandbox host's IP or domain before starting it, and restart:
+sandbox host's IP or domain before starting it, and restart. The CLI
+mirrors it: `signet up --host <ip-or-domain>` seeds the value when the
+stack gets bootstrapped; on an already running stack the flag is a no-op
+(the CLI prints a note — use `signet bootstrap --host …` instead):
 
 ```bash
 SIGNET_ENV_HOST=http://192.168.100.2 signet up --name my-app

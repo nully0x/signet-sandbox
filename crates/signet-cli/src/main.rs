@@ -281,6 +281,15 @@ struct UpOptions {
 
 fn ensure_local_api(common: &Common, host: &str) -> Result<(), CliError> {
     let reachable = local::api_healthy(&common.api);
+    // --host only lands when the stack gets bootstrapped; warn instead of
+    // silently ignoring it on an already running stack.
+    if reachable && host != "localhost" {
+        eprintln!(
+            "note: --host only applies when the local stack is bootstrapped; \
+             the api is already running — `signet bootstrap --host {host}` \
+             changes it there"
+        );
+    }
     if local::should_bootstrap(&common.api, reachable) {
         println!(
             "no local api on {} — bootstrapping the local cluster",
