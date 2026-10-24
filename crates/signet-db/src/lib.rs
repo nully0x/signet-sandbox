@@ -222,7 +222,8 @@ pub async fn get_lightning_instances(
 }
 
 // Ports held by live environments' lightning instances: each instance
-// occupies its REST port and the gRPC port right after it.
+// occupies its REST port, the gRPC port after it, and the p2p port after
+// that.
 async fn held_lightning_ports(pool: &PgPool) -> Result<Vec<i32>, DbError> {
     let ports: Vec<i32> = sqlx::query_scalar(
         "select el.port from environment_lightning el \
@@ -232,39 +233,40 @@ async fn held_lightning_ports(pool: &PgPool) -> Result<Vec<i32>, DbError> {
     .fetch_all(pool)
     .await
     .map_err(DbError::from)?;
-    Ok(ports.into_iter().flat_map(|p| [p, p + 1]).collect())
+    Ok(ports.into_iter().flat_map(|p| [p, p + 1, p + 2]).collect())
 }
 
-// The lowest even-aligned port in `[base, max]` whose pair (p, p + 1) is
-// free given `held`.
-fn free_port_pair(base: i32, max: i32, held: &[i32]) -> Option<i32> {
-    let mut p = if base % 2 == 0 { base } else { base + 1 };
-    while p < max {
-        if !held.contains(&p) && !held.contains(&(p + 1)) {
+// The lowest 3-aligned port in `[base, max]` whose triple
+// (p, p + 1, p + 2) is free given `held`.
+fn free_port_triple(base: i32, max: i32, held: &[i32]) -> Option<i32> {
+    let mut p = base + (3 - base % 3) % 3;
+    while p + 2 <= max {
+        if !held.contains(&p) && !held.contains(&(p + 1)) && !held.contains(&(p + 2)) {
             return Some(p);
         }
-        p += 2;
+        p += 3;
     }
     None
 }
 
-/// Allocate one REST/gRPC port pair per requested instance inside the
-/// published lightning range. Ports held by live environments stay
+/// Allocate one REST/gRPC/p2p port triple per requested instance inside
+/// the published lightning range. Ports held by live environments stay
 /// reserved; destroyed and expired environments release theirs.
 pub async fn next_lightning_ports(
     pool: &PgPool,
     base: i32,
     max: i32,
-    pairs: usize,
+    triples: usize,
 ) -> Result<Vec<i32>, DbError> {
     let held = held_lightning_ports(pool).await?;
-    let mut allocated = Vec::with_capacity(pairs);
+    let mut allocated = Vec::with_capacity(triples);
     let mut all_held = held;
-    for _ in 0..pairs {
-        match free_port_pair(base, max, &all_held) {
+    for _ in 0..triples {
+        match free_port_triple(base, max, &all_held) {
             Some(p) => {
                 all_held.push(p);
                 all_held.push(p + 1);
+                all_held.push(p + 2);
                 allocated.push(p);
             }
             None => return Err(DbError::Pool("lightning port pool exhausted".into())),
@@ -335,7 +337,7 @@ pub struct ApiTokenRow {
 
 #[cfg(test)]
 mod tests {
-    use super::{free_port_pair, lowest_free_port};
+    use super::{free_port_triple, lowest_free_port};
 
     #[test]
     fn empty_pool_starts_at_base() {
@@ -371,33 +373,42 @@ mod tests {
     }
 
     #[test]
-    fn pairs_start_at_base_when_empty() {
-        assert_eq!(free_port_pair(21000, 22199, &[]), Some(21000));
+    fn triples_start_at_base_when_base_is_aligned() {
+        assert_eq!(free_port_triple(21000, 21199, &[]), Some(21000));
     }
 
     #[test]
-    fn pairs_are_even_aligned_and_contiguous() {
-        // 21000 taken: the next pair starts at 21002, never straddling.
-        assert_eq!(free_port_pair(21000, 22199, &[21000, 21001]), Some(21002));
+    fn triples_align_up_from_an_unaligned_base() {
+        assert_eq!(free_port_triple(21001, 21199, &[]), Some(21003));
     }
 
     #[test]
-    fn freed_pairs_are_reused() {
-        assert_eq!(free_port_pair(21000, 22199, &[21002, 21003]), Some(21000));
-    }
-
-    #[test]
-    fn a_straddling_port_blocks_both_pairs() {
-        // 21001 held: pair (21000, 21001) collides, pair (21002, 21003) fits.
-        assert_eq!(free_port_pair(21000, 22199, &[21001]), Some(21002));
-    }
-
-    #[test]
-    fn exhausted_pair_range_is_none() {
+    fn triples_are_contiguous_and_never_straddle() {
+        // 21000 taken: the next triple starts at 21003, never straddling.
         assert_eq!(
-            free_port_pair(21000, 21003, &[21000, 21001, 21002, 21003]),
-            None
+            free_port_triple(21000, 21199, &[21000, 21001, 21002]),
+            Some(21003)
         );
+    }
+
+    #[test]
+    fn freed_triples_are_reused() {
+        assert_eq!(
+            free_port_triple(21000, 21199, &[21003, 21004, 21005]),
+            Some(21000)
+        );
+    }
+
+    #[test]
+    fn a_middle_port_blocks_the_whole_triple() {
+        // 21001 held (an old pair allocation): triple (21000..21002)
+        // collides, the next aligned triple (21003..21005) fits.
+        assert_eq!(free_port_triple(21000, 21199, &[21001]), Some(21003));
+    }
+
+    #[test]
+    fn exhausted_triple_range_is_none() {
+        assert_eq!(free_port_triple(21000, 21002, &[21000, 21001, 21002]), None);
     }
 }
 

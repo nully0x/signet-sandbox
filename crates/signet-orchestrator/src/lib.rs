@@ -43,10 +43,10 @@ const GATEWAY_NAMESPACE: &str = "signet-platform";
 pub const ELECTRUM_PORT_BASE: i32 = 20000;
 pub const ELECTRUM_PORT_MAX: i32 = 20599;
 
-// Per-instance lightning TCP ports: REST on the port, gRPC on port + 1
-// (one port pair per LND instance, allocated from the same window,
-// above the electrs range). Mapped by k3d at cluster create like the
-// electrs window.
+// Per-instance lightning TCP ports: REST on the port, gRPC on port + 1,
+// p2p on port + 2 (one port triple per LND instance, allocated from the
+// same window, above the electrs range). Mapped by k3d at cluster create
+// like the electrs window.
 pub const LIGHTNING_PORT_BASE: i32 = 21000;
 pub const LIGHTNING_PORT_MAX: i32 = 21199;
 
@@ -325,6 +325,17 @@ fn decode_hex(s: &str) -> Option<Vec<u8>> {
 
 fn encode_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// lnd names its hex identity key `identity_pubkey` in getinfo output;
+/// CLN calls the same value `id`. The bundle field is `node_id`.
+fn parse_node_id(out: &[u8]) -> Result<String, OrchestrateError> {
+    let json: serde_json::Value = serde_json::from_slice(out)
+        .map_err(|e| OrchestrateError::Exec(format!("getinfo output is not JSON: {e}")))?;
+    json.get("identity_pubkey")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned)
+        .ok_or_else(|| OrchestrateError::Exec("getinfo has no identity_pubkey".into()))
 }
 
 fn write_compact_size(out: &mut Vec<u8>, len: usize) {
@@ -637,6 +648,15 @@ impl Orchestrator {
                         protocol: Some("TCP".to_string()),
                         ..Default::default()
                     },
+                    k8s_openapi::api::core::v1::ServicePort {
+                        name: Some("p2p".to_string()),
+                        port: rest_port + 2,
+                        target_port: Some(
+                            k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(9735),
+                        ),
+                        protocol: Some("TCP".to_string()),
+                        ..Default::default()
+                    },
                 ]),
                 ..Default::default()
             }),
@@ -658,21 +678,25 @@ impl Orchestrator {
         format!("https://{}:{}", self.ln_host, rest_port + 1)
     }
 
-    /// Read one file out of an instance's pod via exec.
-    async fn read_pod_file(
+    /// Peering URI of one instance: node id plus the host p2p port.
+    pub fn lightning_node_uri(&self, rest_port: i32, node_id: &str) -> String {
+        format!("{node_id}@{}:{}", self.ln_host, rest_port + 2)
+    }
+
+    /// Run one command in an instance's pod, returning stdout. A failing
+    /// command must not return bytes: callers read the error as "not ready
+    /// yet".
+    async fn exec_in_pod(
         &self,
         env_id: &str,
         instance: &str,
-        path: &str,
+        args: Vec<&str>,
     ) -> Result<Vec<u8>, OrchestrateError> {
         let ns = namespace_for(env_id);
         let pods: Api<Pod> = Api::namespaced(self.client.clone(), &ns);
+        let command = args.join(" ");
         let mut attached = pods
-            .exec(
-                &lnd_pod_name(instance),
-                vec!["cat", path],
-                &AttachParams::default(),
-            )
+            .exec(&lnd_pod_name(instance), args, &AttachParams::default())
             .await?;
         let mut stdout = attached
             .stdout()
@@ -681,19 +705,29 @@ impl Orchestrator {
         tokio::io::AsyncReadExt::read_to_end(&mut stdout, &mut buf)
             .await
             .map_err(|e| OrchestrateError::Exec(e.to_string()))?;
-        // `cat` exits non-zero when the file is missing; callers read the
-        // error as "not ready yet", so a failed exec must not return bytes.
+        // A failing command must not return bytes: callers read the
+        // error as "not ready yet".
         let success = match attached.take_status() {
             Some(fut) => fut.await.and_then(|s| s.status).as_deref() == Some("Success"),
             None => false,
         };
         if !success {
             return Err(OrchestrateError::Exec(format!(
-                "cat {path} in {} failed",
+                "{command} in {} failed",
                 lnd_pod_name(instance)
             )));
         }
         Ok(buf)
+    }
+
+    /// Read one file out of an instance's pod via exec.
+    async fn read_pod_file(
+        &self,
+        env_id: &str,
+        instance: &str,
+        path: &str,
+    ) -> Result<Vec<u8>, OrchestrateError> {
+        self.exec_in_pod(env_id, instance, vec!["cat", path]).await
     }
 
     /// Read the admin macaroon out of the instance's pod (hex-encoded).
@@ -722,6 +756,24 @@ impl Orchestrator {
             .read_pod_file(env_id, instance, LND_TLS_CERT_PATH)
             .await?;
         String::from_utf8(buf).map_err(|e| OrchestrateError::Exec(e.to_string()))
+    }
+
+    /// Identity public key (hex) of one instance's node, via
+    /// `lncli getinfo` in the pod. Fails while the wallet is still being
+    /// created — callers treat that as "not ready yet".
+    pub async fn lightning_node_id(
+        &self,
+        env_id: &str,
+        instance: &str,
+    ) -> Result<String, OrchestrateError> {
+        let buf = self
+            .exec_in_pod(
+                env_id,
+                instance,
+                vec!["lncli", "--network=signet", "getinfo"],
+            )
+            .await?;
+        parse_node_id(&buf)
     }
 
     /// Apply additional lightning instances into an existing env's
@@ -1058,6 +1110,24 @@ mod tests {
     #[test]
     fn lnd_exec_targets_the_statefulset_pod() {
         assert_eq!(lnd_pod_name("ln-alice"), "lnd-ln-alice-0");
+    }
+
+    #[test]
+    fn getinfo_yields_the_identity_key() {
+        let out = br#"{
+            "version": "0.21.4-beta",
+            "identity_pubkey": "02aa550000000000000000000000000000000000000000000000000000000000"
+        }"#;
+        assert_eq!(
+            parse_node_id(out).unwrap(),
+            "02aa550000000000000000000000000000000000000000000000000000000000"
+        );
+    }
+
+    #[test]
+    fn malformed_getinfo_output_is_an_error() {
+        assert!(parse_node_id(b"{}").is_err());
+        assert!(parse_node_id(b"not json").is_err());
     }
 
     use super::*;

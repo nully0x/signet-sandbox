@@ -85,6 +85,8 @@ pub fn print_bundle_human(bundle: &ConnectionBundle) {
                 "lightning {name}:      {} ({})",
                 connection.rest_url, connection.implementation
             );
+            println!("  node_id:  {}", connection.node_id);
+            println!("  node_uri: {}", connection.node_uri);
         }
     }
     println!("signet_challenge: {}", bundle.signet_challenge);

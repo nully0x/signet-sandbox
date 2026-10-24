@@ -199,18 +199,23 @@ cargo run -p signet-orchestrator --example provision -- destroy <env-id>
 ## Lightning endpoints and DNS
 
 Every LND instance is reachable by port, not by name: the instance's
-LoadBalancer service exposes REST and gRPC on two ports from the
-lightning range (21000-21199 — REST on the even port, gRPC on odd),
-mapped onto the host by k3d like the electrs range. The bundle carries
-the concrete URLs:
+LoadBalancer service exposes REST, gRPC, and p2p on three ports from the
+lightning range (21000-21199 — REST on the port, gRPC on port + 1, p2p
+on port + 2), mapped onto the host by k3d like the electrs range. The
+bundle carries the concrete URLs plus the node identity:
 
 ```text
-rest  https://localhost:21000      (on the cluster machine)
-grpc  https://localhost:21001
-rest  https://192.168.100.2:21000  (from any machine — LND's certificate
-                                    includes the deployment IP from
-                                    SIGNET_ENV_HOST)
+rest      https://localhost:21000      (on the cluster machine)
+grpc      https://localhost:21001
+p2p       localhost:21002              (peering — node_uri uses this)
+rest      https://192.168.100.2:21000  (from any machine — LND's certificate
+                                       includes the deployment IP from
+                                       SIGNET_ENV_HOST)
 ```
+
+Each lightning entry in the bundle carries `node_id` (the hex identity
+public key, read with `lncli getinfo` in the pod) and `node_uri`
+(`<node_id>@<host>:<p2p port>`) for peering.
 
 The CLI seeds the same value at stack bootstrap: `signet bootstrap --host
 <ip-or-domain>` (or `signet up --host …` when the bootstrap fires). On an

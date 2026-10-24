@@ -629,8 +629,14 @@ async fn lightning_connections(
                 .orchestrator
                 .lightning_tls_cert(&short, &instance.name)
                 .await?;
+            let node_id = state
+                .orchestrator
+                .lightning_node_id(&short, &instance.name)
+                .await?;
             Ok::<_, signet_orchestrator::OrchestrateError>(LightningConnection {
                 implementation: instance.implementation.clone(),
+                node_id: node_id.clone(),
+                node_uri: state.orchestrator.lightning_node_uri(port, &node_id),
                 rest_url: state.orchestrator.lightning_rest_url(port),
                 grpc_url: state.orchestrator.lightning_grpc_url(port),
                 tls_cert,
