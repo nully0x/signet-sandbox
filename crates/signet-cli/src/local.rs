@@ -292,6 +292,8 @@ fn ensure_cluster(bin: &Path) -> anyhow::Result<()> {
             .arg("20000-20599:20000-20599@loadbalancer")
             .arg("--port")
             .arg("21000-21199:21000-21199@loadbalancer")
+            .arg("--k3s-arg")
+            .arg("--disable=traefik@server:0")
             .arg("--volume")
             .arg("signet-data:/var/lib/rancher/k3s/storage@server:0"))?;
         run(k3d(bin)?.args(["kubeconfig", "write", CLUSTER]))?;

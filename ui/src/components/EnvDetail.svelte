@@ -259,7 +259,7 @@
         <Copyable label="rest url" value={ln.rest_url} />
         <Copyable label="grpc url" value={ln.grpc_url} />
         <Copyable label="macaroon" value={ln.auth.value} secret />
-        <Copyable label="tls cert" value={ln.tls_cert} secret multiline />
+        <Copyable label="tls ca" value={ln.tls_cert} secret multiline />
       </div>
     {/each}
   </section>

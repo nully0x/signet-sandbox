@@ -643,9 +643,9 @@ async fn lightning_connections(
                 .orchestrator
                 .lightning_admin_macaroon(&short, &instance.name)
                 .await?;
-            let tls_cert = state
+            let tls_ca = state
                 .orchestrator
-                .lightning_tls_cert(&short, &instance.name)
+                .lightning_tls_ca(&short, &instance.name)
                 .await?;
             let node_id = state
                 .orchestrator
@@ -657,7 +657,7 @@ async fn lightning_connections(
                 node_uri: state.orchestrator.lightning_node_uri(port, &node_id),
                 rest_url: state.orchestrator.lightning_rest_url(port),
                 grpc_url: state.orchestrator.lightning_grpc_url(port),
-                tls_cert,
+                tls_cert: tls_ca,
                 auth: signet_core::bundle::BundleAuth {
                     kind: "macaroon".to_string(),
                     value: macaroon,
