@@ -23,6 +23,7 @@ cluster-up:
             --port "443:443@loadbalancer" \
             --port "20000-20599:20000-20599@loadbalancer" \
             --port "21000-21199:21000-21199@loadbalancer" \
+            --k3s-arg "--disable=traefik@server:0" \
             --volume signet-data:/var/lib/rancher/k3s/storage@server:0
         k3d kubeconfig write {{cluster}}
         k3d kubeconfig merge {{cluster}} --kubeconfig-merge-default -u
