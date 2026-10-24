@@ -23,8 +23,8 @@ pub struct LightningConnection {
     pub node_uri: String,
     pub rest_url: String,
     pub grpc_url: String,
-    /// Instance's self-signed TLS cert in PEM form. Public material;
-    /// clients pin it instead of disabling verification.
+    /// Instance TLS CA in PEM form. Public material; clients pin it as
+    /// a root — the served leaf chains to it.
     pub tls_cert: String,
     pub auth: BundleAuth,
 }

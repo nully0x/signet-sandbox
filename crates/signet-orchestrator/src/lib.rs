@@ -13,13 +13,13 @@ use signet_core::env::LightningInstance;
 use signet_core::versions::VersionCatalog;
 
 mod reaper;
+mod tls;
 
 const BITCOIND_MANIFEST: &str = include_str!("../templates/bitcoind.yaml");
 const SIGNER_MANIFEST: &str = include_str!("../templates/signer.yaml");
 const FAUCET_MANIFEST: &str = include_str!("../templates/faucet.yaml");
 const LND_MANIFEST: &str = include_str!("../templates/lnd.yaml");
 const LND_MACAROON_PATH: &str = "/root/.lnd/data/chain/bitcoin/signet/admin.macaroon";
-const LND_TLS_CERT_PATH: &str = "/root/.lnd/tls.cert";
 const LND_WALLET_PASSWORD_KEY: &str = "LND_WALLET_PASSWORD";
 const ELECTRS_MANIFEST: &str = include_str!("../templates/electrs.yaml");
 const EXPLORER_MANIFEST: &str = include_str!("../templates/explorer.yaml");
@@ -311,6 +311,8 @@ pub enum OrchestrateError {
     Incompatible(String),
     #[error("pod exec failed: {0}")]
     Exec(String),
+    #[error("lnd tls generation: {0}")]
+    Tls(#[from] rcgen::Error),
 }
 
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
@@ -567,7 +569,7 @@ impl Orchestrator {
                 .await?;
         }
         for (instance, rest_port) in params.lightning {
-            self.apply_lnd(&ns, instance, params.images, *rest_port, &self.ln_host)
+            self.apply_lnd(&ns, instance, params.images, *rest_port)
                 .await?;
         }
         // lnd self-bootstraps: with --noseedbackup it creates and
@@ -586,26 +588,54 @@ impl Orchestrator {
         Ok(())
     }
 
-    /// Apply one Lightning instance's manifest and LoadBalancer service.
-    /// The template's LND_NAME placeholder carries the instance name,
-    /// EXTRA_HOST_PLACEHOLDER the deployment's public host (IP or domain — baked
-    /// into the TLS cert so remote clients verify it), and the container
-    /// image comes from the resolved versions map.
+    /// Apply one Lightning instance's TLS material, manifest, and
+    /// LoadBalancer service. The template's LND_NAME placeholder carries
+    /// the instance name and the container image comes from the resolved
+    /// versions map. The TLS secret is created once: a re-apply keeps the
+    /// original certs, so client-pinned roots stay valid.
     async fn apply_lnd(
         &self,
         ns: &str,
         instance: &LightningInstance,
         images: &BTreeMap<String, String>,
         rest_port: i32,
-        extra_host: &str,
     ) -> Result<(), OrchestrateError> {
-        let env = [("EXTRA_HOST_PLACEHOLDER", extra_host)];
-        let mut manifest = lnd_manifest(instance);
-        for (placeholder, value) in env {
-            manifest = manifest.replace(placeholder, value);
-        }
+        let instance_tls = tls::generate_instance_tls(&instance.name, ns, &self.ln_host)?;
+        self.apply_lnd_tls_secret(ns, &instance.name, &instance_tls)
+            .await?;
+        let manifest = lnd_manifest(instance);
         self.apply_manifest(ns, &manifest, images).await?;
         self.apply_lnd_lb(ns, instance, rest_port).await
+    }
+
+    /// Create the instance's TLS secret (`ca.crt`, `tls.crt` chain,
+    /// `tls.key`). The pod mounts it read-only; LND serves the leaf+CA
+    /// chain from it, which strict clients verify against the pinned CA.
+    async fn apply_lnd_tls_secret(
+        &self,
+        ns: &str,
+        instance: &str,
+        instance_tls: &tls::InstanceTls,
+    ) -> Result<(), OrchestrateError> {
+        let secret = Secret {
+            metadata: ObjectMeta {
+                name: Some(format!("lnd-tls-{instance}")),
+                namespace: Some(ns.to_string()),
+                ..Default::default()
+            },
+            string_data: Some(BTreeMap::from([
+                ("ca.crt".to_string(), instance_tls.ca_pem.clone()),
+                ("tls.crt".to_string(), instance_tls.chain_pem.clone()),
+                ("tls.key".to_string(), instance_tls.key_pem.clone()),
+            ])),
+            ..Default::default()
+        };
+        let secrets: Api<Secret> = Api::namespaced(self.client.clone(), ns);
+        match secrets.create(&PostParams::default(), &secret).await {
+            Ok(_) => Ok(()),
+            Err(Error::Api(api_error)) if api_error.code == 409 => Ok(()),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// REST + gRPC exposure for one instance: a LoadBalancer service
@@ -744,18 +774,25 @@ impl Orchestrator {
         Ok(encode_hex(&buf))
     }
 
-    /// Read the instance's self-signed TLS cert (PEM). LND generates it
-    /// on first boot; it is public material — only the macaroon is a
-    /// secret. Callers treat a failure as "not ready yet".
-    pub async fn lightning_tls_cert(
+    /// The instance's TLS CA (PEM). The orchestrator provisions it per
+    /// instance; clients pin it as a root. Public material — only the
+    /// macaroon is a secret.
+    pub async fn lightning_tls_ca(
         &self,
         env_id: &str,
         instance: &str,
     ) -> Result<String, OrchestrateError> {
-        let buf = self
-            .read_pod_file(env_id, instance, LND_TLS_CERT_PATH)
-            .await?;
-        String::from_utf8(buf).map_err(|e| OrchestrateError::Exec(e.to_string()))
+        let ns = namespace_for(env_id);
+        let secrets: Api<Secret> = Api::namespaced(self.client.clone(), &ns);
+        let secret = secrets.get(&format!("lnd-tls-{instance}")).await?;
+        secret
+            .data
+            .as_ref()
+            .and_then(|entries| entries.get("ca.crt"))
+            .map(|bytes| String::from_utf8_lossy(&bytes.0).to_string())
+            .ok_or_else(|| {
+                OrchestrateError::Exec(format!("secret lnd-tls-{instance} has no ca.crt"))
+            })
     }
 
     /// Identity public key (hex) of one instance's node, via
@@ -791,8 +828,7 @@ impl Orchestrator {
         self.ensure_lnd_wallet_password(&ns, lnd_wallet_password)
             .await?;
         for (instance, rest_port) in instances {
-            self.apply_lnd(&ns, instance, images, *rest_port, &self.ln_host)
-                .await?;
+            self.apply_lnd(&ns, instance, images, *rest_port).await?;
         }
         Ok(())
     }
@@ -1091,20 +1127,16 @@ mod tests {
     use signet_core::env::LightningImplementation;
 
     #[test]
-    fn lnd_manifest_substitutes_the_host_without_touching_the_env_name() {
-        // The regression: substituting a placeholder that collided with
-        // the env var name corrupted the script's $LND_EXTRA_HOST
-        // reference (the shell ate "$1" out of the address).
+    fn lnd_manifest_mounts_the_instance_tls_secret() {
         let manifest = lnd_manifest(&LightningInstance {
             name: "ln-smoke".to_string(),
             implementation: LightningImplementation::Lnd,
-        })
-        .replace("EXTRA_HOST_PLACEHOLDER", "192.168.100.2");
-        assert!(manifest.contains("name: LND_EXTRA_HOST"));
-        assert!(manifest.contains("value: 192.168.100.2"));
-        assert!(manifest.contains("--tlsextraip=$LND_EXTRA_HOST"));
-        assert!(!manifest.contains("EXTRA_HOST_PLACEHOLDER"));
-        assert!(!manifest.contains("$192"));
+        });
+        assert!(manifest.contains("secretName: lnd-ln-smoke-tls"));
+        assert!(manifest.contains("--tlscertpath=/root/.lnd/tls/tls.crt"));
+        assert!(manifest.contains("--tlskeypath=/root/.lnd/tls/tls.key"));
+        assert!(!manifest.contains("EXTRA_HOST"));
+        assert!(!manifest.contains("tlsextra"));
     }
 
     #[test]
