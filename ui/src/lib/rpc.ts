@@ -70,6 +70,8 @@ export interface BundleAuth {
 
 export interface LightningConnection {
   implementation: string
+  node_id: string
+  node_uri: string
   rest_url: string
   grpc_url: string
   tls_cert: string

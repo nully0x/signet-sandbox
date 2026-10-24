@@ -81,7 +81,7 @@ pub fn bootstrap(host: &str) -> anyhow::Result<()> {
         "profile written: {} (identity {npub})",
         crate::profile::path()?.display()
     );
-    println!("local stack ready: provisioning api on http://localhost:8081");
+    println!("local stack ready: provisioning api on http://{host}:8081");
     Ok(())
 }
 

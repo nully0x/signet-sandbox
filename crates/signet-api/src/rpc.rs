@@ -1,4 +1,4 @@
-use axum::extract::State;
+use axum::extract::{OriginalUri, State};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::IntoResponse;
@@ -70,6 +70,7 @@ async fn healthz() -> &'static str {
 
 async fn dispatch(
     State(state): State<AppState>,
+    uri: OriginalUri,
     method: Method,
     headers: HeaderMap,
     body: axum::body::Bytes,
@@ -90,7 +91,8 @@ async fn dispatch(
     };
 
     let id = request.id.clone().unwrap_or(Id::Null);
-    let (caller, via_nip98) = match authenticate(&state, &method, &headers).await {
+    let url = request_url(&headers, uri.path());
+    let (caller, via_nip98) = match authenticate(&state, &url, &method, &headers).await {
         Ok(auth) => auth,
         Err(err) => return (StatusCode::OK, Json(Response::error(Some(id), err))),
     };
@@ -99,8 +101,30 @@ async fn dispatch(
     (StatusCode::OK, Json(response))
 }
 
+/// The URL the request actually hit, per NIP-98: scheme, authority,
+/// path. The scheme comes from `X-Forwarded-Proto` (first hop wins when
+/// several proxies chained) so TLS-terminating edges verify https URLs;
+/// direct connections are plain http. The authority is the `Host`
+/// header, which TCP passthroughs and proxies preserve. This replaces
+/// the pinned public URL: clients sign whatever URL they use, so the
+/// same API verifies localhost and LAN callers.
+fn request_url(headers: &HeaderMap, path: &str) -> String {
+    let scheme = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(str::trim)
+        .unwrap_or("http");
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    format!("{scheme}://{host}{path}")
+}
+
 async fn authenticate(
     state: &AppState,
+    url: &str,
     http_method: &Method,
     headers: &HeaderMap,
 ) -> Result<(Caller, bool), Error> {
@@ -110,13 +134,8 @@ async fn authenticate(
         .ok_or_else(|| unauthenticated("missing Authorization header"))?;
 
     if let Some(payload) = header.strip_prefix("Nostr ") {
-        return verify_nip98(
-            payload,
-            &state.public_url,
-            http_method.as_str(),
-            state.nip98_max_age,
-        )
-        .map(|c| (c, true));
+        return verify_nip98(payload, url, http_method.as_str(), state.nip98_max_age)
+            .map(|c| (c, true));
     }
 
     if let Some(raw) = header.strip_prefix("Bearer ") {
@@ -128,13 +147,12 @@ async fn authenticate(
 
 fn verify_nip98(
     payload: &str,
-    public_url: &str,
+    url: &str,
     method: &str,
     max_age: Option<Duration>,
 ) -> Result<Caller, Error> {
     let header = format!("Nostr {payload}");
-    let url = format!("{public_url}/api/rpc");
-    match verify_nip98_header(&header, &url, method, max_age) {
+    match verify_nip98_header(&header, url, method, max_age) {
         Ok(npub) => Ok(Caller { npub }),
         Err(e) => Err(Error::new(
             UNAUTHENTICATED,
@@ -629,8 +647,14 @@ async fn lightning_connections(
                 .orchestrator
                 .lightning_tls_cert(&short, &instance.name)
                 .await?;
+            let node_id = state
+                .orchestrator
+                .lightning_node_id(&short, &instance.name)
+                .await?;
             Ok::<_, signet_orchestrator::OrchestrateError>(LightningConnection {
                 implementation: instance.implementation.clone(),
+                node_id: node_id.clone(),
+                node_uri: state.orchestrator.lightning_node_uri(port, &node_id),
                 rest_url: state.orchestrator.lightning_rest_url(port),
                 grpc_url: state.orchestrator.lightning_grpc_url(port),
                 tls_cert,
@@ -1198,7 +1222,6 @@ mod tests {
     use nostr::nips::nip19::ToBech32 as _;
     use nostr::types::Timestamp;
 
-    const PUBLIC_URL: &str = "http://localhost:8081";
     const RPC_URL: &str = "http://localhost:8081/api/rpc";
 
     fn auth_header(keys: &Keys, url: &str, method: &str) -> String {
@@ -1219,10 +1242,19 @@ mod tests {
     fn verified(header: &str) -> Result<Caller, Error> {
         verify_nip98(
             header.strip_prefix("Nostr ").unwrap(),
-            PUBLIC_URL,
+            RPC_URL,
             "POST",
             Some(signet_nostr::DEFAULT_MAX_AGE),
         )
+    }
+
+    fn headers_with_host(host: &str, forwarded_proto: Option<&str>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(axum::http::header::HOST, host.parse().unwrap());
+        if let Some(proto) = forwarded_proto {
+            headers.insert("x-forwarded-proto", proto.parse().unwrap());
+        }
+        headers
     }
 
     fn is_unauthenticated(err: &Error) -> bool {
@@ -1234,6 +1266,43 @@ mod tests {
         let keys = Keys::parse(&format!("{:064x}", 7)).unwrap();
         let caller = verified(&auth_header(&keys, RPC_URL, "POST")).unwrap();
         assert_eq!(caller.npub, keys.public_key().to_bech32().unwrap());
+    }
+
+    #[test]
+    fn a_non_public_host_verifies_when_it_is_the_received_url() {
+        // Regression: bootstrap --host advertises a non-localhost public
+        // URL while the local caller still signs the localhost URL it
+        // posts to. Verification follows the received URL, not the
+        // advertised one.
+        let keys = Keys::parse(&format!("{:064x}", 7)).unwrap();
+        let lan_url = "http://192.168.100.2:8081/api/rpc";
+        let header = auth_header(&keys, lan_url, "POST");
+        let caller = verify_nip98(
+            header.strip_prefix("Nostr ").unwrap(),
+            lan_url,
+            "POST",
+            Some(signet_nostr::DEFAULT_MAX_AGE),
+        )
+        .unwrap();
+        assert_eq!(caller.npub, keys.public_key().to_bech32().unwrap());
+    }
+
+    #[test]
+    fn request_url_is_scheme_host_and_path() {
+        let headers = headers_with_host("localhost:8081", None);
+        assert_eq!(
+            request_url(&headers, "/api/rpc"),
+            "http://localhost:8081/api/rpc"
+        );
+    }
+
+    #[test]
+    fn request_url_trusts_the_first_forwarded_proto() {
+        let headers = headers_with_host("api.example", Some("https,http"));
+        assert_eq!(
+            request_url(&headers, "/api/rpc"),
+            "https://api.example/api/rpc"
+        );
     }
 
     #[test]

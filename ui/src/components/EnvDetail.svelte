@@ -254,6 +254,8 @@
     {#each instances as [name, ln] (name)}
       <div class="instance">
         <h3>{name} <span class="impl">{ln.implementation}</span></h3>
+        <Copyable label="node id" value={ln.node_id} />
+        <Copyable label="peer uri" value={ln.node_uri} />
         <Copyable label="rest url" value={ln.rest_url} />
         <Copyable label="grpc url" value={ln.grpc_url} />
         <Copyable label="macaroon" value={ln.auth.value} secret />

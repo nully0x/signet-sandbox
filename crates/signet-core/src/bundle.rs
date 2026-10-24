@@ -16,6 +16,11 @@ pub struct BundleAuth {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LightningConnection {
     pub implementation: String,
+    /// Hex identity public key; implementations disagree on the name
+    /// (lnd `identity_pubkey`, CLN `id`), so the bundle fixes one.
+    pub node_id: String,
+    /// Peering URI `node_id@host:port`; the host port maps to p2p 9735.
+    pub node_uri: String,
     pub rest_url: String,
     pub grpc_url: String,
     /// Instance's self-signed TLS cert in PEM form. Public material;
@@ -100,6 +105,8 @@ mod tests {
             "ln-alice".to_string(),
             LightningConnection {
                 implementation: "lnd".into(),
+                node_id: "02aa55".into(),
+                node_uri: "02aa55@example:21002".into(),
                 rest_url: "https://example/env/ln/rest".into(),
                 grpc_url: "https://example/env/ln/grpc".into(),
                 tls_cert: "-----BEGIN CERTIFICATE-----".into(),
@@ -122,6 +129,8 @@ mod tests {
             "ln-alice".to_string(),
             LightningConnection {
                 implementation: "lnd".into(),
+                node_id: "02aa55".into(),
+                node_uri: "02aa55@example:21002".into(),
                 rest_url: "https://example/ln".into(),
                 grpc_url: "https://example/ln-grpc".into(),
                 tls_cert: "-----BEGIN CERTIFICATE-----".into(),
@@ -134,6 +143,8 @@ mod tests {
         let json = serde_json::to_value(b).unwrap();
         let entry = &json["lightning"]["ln-alice"];
         assert_eq!(entry["implementation"], "lnd");
+        assert_eq!(entry["node_id"], "02aa55");
+        assert_eq!(entry["node_uri"], "02aa55@example:21002");
         assert_eq!(entry["auth"]["type"], "macaroon");
         assert_eq!(entry["auth"]["value"], "0202");
     }
