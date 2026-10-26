@@ -20,6 +20,9 @@ const SIGNER_MANIFEST: &str = include_str!("../templates/signer.yaml");
 const FAUCET_MANIFEST: &str = include_str!("../templates/faucet.yaml");
 const LND_MANIFEST: &str = include_str!("../templates/lnd.yaml");
 const LND_MACAROON_PATH: &str = "/root/.lnd/data/chain/bitcoin/signet/admin.macaroon";
+/// Where the provisioned leaf cert lives; lncli must be told, its
+/// default `~/.lnd/tls.cert` no longer exists.
+const LND_TLS_CERT_FILE: &str = "/root/.lnd/tls/tls.crt";
 const LND_WALLET_PASSWORD_KEY: &str = "LND_WALLET_PASSWORD";
 const ELECTRS_MANIFEST: &str = include_str!("../templates/electrs.yaml");
 const EXPLORER_MANIFEST: &str = include_str!("../templates/explorer.yaml");
@@ -619,7 +622,7 @@ impl Orchestrator {
     ) -> Result<(), OrchestrateError> {
         let secret = Secret {
             metadata: ObjectMeta {
-                name: Some(format!("lnd-tls-{instance}")),
+                name: Some(format!("lnd-{instance}-tls")),
                 namespace: Some(ns.to_string()),
                 ..Default::default()
             },
@@ -784,14 +787,14 @@ impl Orchestrator {
     ) -> Result<String, OrchestrateError> {
         let ns = namespace_for(env_id);
         let secrets: Api<Secret> = Api::namespaced(self.client.clone(), &ns);
-        let secret = secrets.get(&format!("lnd-tls-{instance}")).await?;
+        let secret = secrets.get(&format!("lnd-{instance}-tls")).await?;
         secret
             .data
             .as_ref()
             .and_then(|entries| entries.get("ca.crt"))
             .map(|bytes| String::from_utf8_lossy(&bytes.0).to_string())
             .ok_or_else(|| {
-                OrchestrateError::Exec(format!("secret lnd-tls-{instance} has no ca.crt"))
+                OrchestrateError::Exec(format!("secret lnd-{instance}-tls has no ca.crt"))
             })
     }
 
@@ -807,7 +810,12 @@ impl Orchestrator {
             .exec_in_pod(
                 env_id,
                 instance,
-                vec!["lncli", "--network=signet", "getinfo"],
+                vec![
+                    "lncli",
+                    "--network=signet",
+                    &format!("--tlscertpath={LND_TLS_CERT_FILE}"),
+                    "getinfo",
+                ],
             )
             .await?;
         parse_node_id(&buf)
