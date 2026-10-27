@@ -543,6 +543,15 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
         tracing::error!(error = %e, "lightning instance persist failed");
     }
 
+    spawn_lightning_mesh(
+        state,
+        env_id,
+        lightning
+            .iter()
+            .map(|(instance, _)| instance.name.clone())
+            .collect(),
+    );
+
     Response::result(
         Some(id),
         serde_json::to_value(bundle_for(
@@ -611,6 +620,36 @@ async fn bundle_response(
         serde_json::to_value(bundle_for(row, status, rpc_auth, lightning))
             .expect("bundle serializes"),
     )
+}
+
+/// Envs are isolated chains: public signet seeds can never peer with
+/// them (the p2p magic derives from the per-env challenge), so sibling
+/// instances are each other's only peers. Wallets come up after
+/// provisioning returns, so mesh in the background: retry until every
+/// instance answers getinfo, then cross-connect the pairs.
+fn spawn_lightning_mesh(state: &AppState, env_id: Uuid, names: Vec<String>) {
+    if names.len() < 2 {
+        return;
+    }
+    let orchestrator = state.orchestrator.clone();
+    let short = short_id(env_id);
+    tokio::spawn(async move {
+        const ATTEMPTS: u64 = 80;
+        const INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+        for _ in 0..ATTEMPTS {
+            match orchestrator.mesh_lightning_peers(&short, &names).await {
+                Ok(initiated) => {
+                    tracing::info!(env = %short, initiated, "lightning instances peered");
+                    return;
+                }
+                Err(e) => {
+                    tracing::debug!(error = %e, env = %short, "lightning mesh not ready; retrying")
+                }
+            }
+            tokio::time::sleep(INTERVAL).await;
+        }
+        tracing::warn!(env = %short, "gave up peering lightning instances");
+    });
 }
 
 /// Per-instance connection entries for a bundle. An entry appears only
@@ -863,6 +902,15 @@ async fn environment_update(state: &AppState, id: Id, caller: Caller, params: Va
     if let Err(e) = signet_db::set_lightning_instances(&state.pool, row.id, &lightning).await {
         tracing::error!(error = %e, "lightning instance persist failed");
     }
+
+    spawn_lightning_mesh(
+        state,
+        row.id,
+        lightning
+            .iter()
+            .map(|(instance, _)| instance.name.clone())
+            .collect(),
+    );
 
     bundle_response(state, id, &row, EnvStatus::Ready).await
 }

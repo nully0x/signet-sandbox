@@ -1,5 +1,9 @@
 # Per-instance LND: LND_NAME is substituted per instance
 # before apply. Connects to the environment's one bitcoind over RPC + ZMQ.
+# --nobootstrap: public signet seeds cannot answer on an isolated chain
+# (the p2p magic derives from the per-env challenge), so automatic
+# bootstrap can only log noise; the api meshes sibling instances over
+# exec instead.
 # First boot creates the wallet (--noseedbackup: env wallets are disposable);
 # later boots unlock it. The admin macaroon is read by the api via exec.
 # TLS is orchestrator-provisioned (secret lnd-LND_NAME-tls): LND's
@@ -21,6 +25,9 @@ spec:
     - name: grpc
       port: 10009
       targetPort: 10009
+    - name: p2p
+      port: 9735
+      targetPort: 9735
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -51,6 +58,7 @@ spec:
               # present lnd never autogenerates a cert.
               exec lnd \
                 --noseedbackup \
+                --nobootstrap \
                 --bitcoin.signet \
                 --bitcoin.node=bitcoind \
                 --bitcoind.rpchost=bitcoind:38332 \

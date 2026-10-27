@@ -1,11 +1,13 @@
 mod dashboard;
 mod rpc;
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
+use uuid::Uuid;
 
 #[derive(Parser, Debug)]
 #[command(name = "signet-api", about = "Signet sandbox provisioning API")]
@@ -38,6 +40,14 @@ struct Args {
         help = "Reaper pass interval in seconds; 0 disables the reaper"
     )]
     reaper_interval_secs: u64,
+
+    #[arg(
+        long,
+        env = "SIGNET_MESH_INTERVAL_SECS",
+        default_value_t = 60,
+        help = "Lightning mesh reconcile interval in seconds; 0 disables it"
+    )]
+    mesh_interval_secs: u64,
 
     #[arg(
         long,
@@ -102,6 +112,53 @@ async fn main() -> anyhow::Result<()> {
         });
     } else {
         tracing::info!("reaper disabled");
+    }
+
+    // Envs are isolated chains: public signet seeds never answer, so
+    // sibling lightning instances are each other's only peers. The
+    // provisioning-time mesh is one-shot; this pass re-runs it so a
+    // restarted pod (or a slow wallet) regains its peers.
+    if args.mesh_interval_secs > 0 {
+        let mesh = orchestrator.clone();
+        let pool = pool.clone();
+        let interval = std::time::Duration::from_secs(args.mesh_interval_secs);
+        tracing::info!(
+            interval_secs = args.mesh_interval_secs,
+            "lightning mesh reconciler enabled"
+        );
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(interval).await;
+                let targets = match signet_db::lightning_mesh_targets(&pool).await {
+                    Ok(targets) => targets,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "mesh target lookup failed");
+                        continue;
+                    }
+                };
+                let mut envs: BTreeMap<Uuid, Vec<String>> = BTreeMap::new();
+                for (env_id, name) in targets {
+                    envs.entry(env_id).or_default().push(name);
+                }
+                for (env_id, names) in envs {
+                    if names.len() < 2 {
+                        continue;
+                    }
+                    let short = env_id.simple().to_string()[..12].to_string();
+                    match mesh.mesh_lightning_peers(&short, &names).await {
+                        Ok(0) => {}
+                        Ok(initiated) => {
+                            tracing::info!(env = %short, initiated, "lightning instances peered")
+                        }
+                        Err(e) => {
+                            tracing::debug!(error = %e, env = %short, "mesh reconcile skipped")
+                        }
+                    }
+                }
+            }
+        });
+    } else {
+        tracing::info!("lightning mesh reconciler disabled");
     }
 
     let catalog = signet_core::versions::VersionCatalog::embedded();

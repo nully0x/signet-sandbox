@@ -20,9 +20,9 @@ const SIGNER_MANIFEST: &str = include_str!("../templates/signer.yaml");
 const FAUCET_MANIFEST: &str = include_str!("../templates/faucet.yaml");
 const LND_MANIFEST: &str = include_str!("../templates/lnd.yaml");
 const LND_MACAROON_PATH: &str = "/root/.lnd/data/chain/bitcoin/signet/admin.macaroon";
-/// Where the provisioned leaf cert lives; lncli must be told, its
-/// default `~/.lnd/tls.cert` no longer exists.
-const LND_TLS_CERT_FILE: &str = "/root/.lnd/tls/tls.crt";
+/// lncli's default `~/.lnd/tls.cert` no longer exists; the provisioned
+/// leaf cert lives under /root/.lnd/tls and must be passed explicitly.
+const LND_TLS_CERT_FLAG: &str = "--tlscertpath=/root/.lnd/tls/tls.crt";
 const LND_WALLET_PASSWORD_KEY: &str = "LND_WALLET_PASSWORD";
 const ELECTRS_MANIFEST: &str = include_str!("../templates/electrs.yaml");
 const EXPLORER_MANIFEST: &str = include_str!("../templates/explorer.yaml");
@@ -341,6 +341,28 @@ fn parse_node_id(out: &[u8]) -> Result<String, OrchestrateError> {
         .and_then(|v| v.as_str())
         .map(str::to_owned)
         .ok_or_else(|| OrchestrateError::Exec("getinfo has no identity_pubkey".into()))
+}
+
+/// Base lncli invocation: signet network plus the provisioned cert path
+/// (lncli's default `~/.lnd/tls.cert` no longer exists).
+fn lncli_base() -> [&'static str; 3] {
+    ["lncli", "--network=signet", LND_TLS_CERT_FLAG]
+}
+
+fn parse_peer_keys(out: &[u8]) -> Result<Vec<String>, OrchestrateError> {
+    let json: serde_json::Value = serde_json::from_slice(out)
+        .map_err(|e| OrchestrateError::Exec(format!("listpeers output is not JSON: {e}")))?;
+    Ok(json
+        .get("peers")
+        .and_then(|v| v.as_array())
+        .map(|peers| {
+            peers
+                .iter()
+                .filter_map(|p| p.get("pub_key").and_then(|k| k.as_str()))
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default())
 }
 
 fn write_compact_size(out: &mut Vec<u8>, len: usize) {
@@ -810,15 +832,76 @@ impl Orchestrator {
             .exec_in_pod(
                 env_id,
                 instance,
-                vec![
-                    "lncli",
-                    "--network=signet",
-                    &format!("--tlscertpath={LND_TLS_CERT_FILE}"),
-                    "getinfo",
-                ],
+                vec!["lncli", "--network=signet", LND_TLS_CERT_FLAG, "getinfo"],
             )
             .await?;
         parse_node_id(&buf)
+    }
+
+    /// Initiate one p2p connection between two instances of the same
+    /// environment. Envs are isolated chains (the signet magic derives
+    /// from the per-env challenge), so public signet seeds can never
+    /// peer — sibling instances are the only reachable peers.
+    pub async fn lightning_connect_peer(
+        &self,
+        env_id: &str,
+        instance: &str,
+        peer_node_id: &str,
+        peer_instance: &str,
+    ) -> Result<(), OrchestrateError> {
+        let target = format!("{peer_node_id}@lnd-{peer_instance}:9735");
+        let mut args: Vec<&str> = lncli_base().to_vec();
+        args.extend(["connect", &target]);
+        self.exec_in_pod(env_id, instance, args).await?;
+        Ok(())
+    }
+
+    /// Cross-connect every instance pair in one environment. Idempotent:
+    /// pairs that are already peered are skipped (an `already connected`
+    /// race fails the call and the caller retries). Returns the number of
+    /// new connections initiated. Fails while any wallet is still being
+    /// created — callers treat that as "not ready yet" and retry.
+    pub async fn mesh_lightning_peers(
+        &self,
+        env_id: &str,
+        instances: &[String],
+    ) -> Result<usize, OrchestrateError> {
+        if instances.len() < 2 {
+            return Ok(0);
+        }
+        let mut node_ids = Vec::with_capacity(instances.len());
+        for instance in instances {
+            node_ids.push(self.lightning_node_id(env_id, instance).await?);
+        }
+        let mut initiated = 0;
+        for (a_idx, a) in instances.iter().enumerate() {
+            for (b, b_node_id) in instances.iter().zip(&node_ids).skip(a_idx + 1) {
+                match self.lightning_connect_peer(env_id, a, b_node_id, b).await {
+                    Ok(()) => initiated += 1,
+                    // A concurrent connect wins the race: already-peered
+                    // is success. Any other error propagates for retry.
+                    Err(e) => {
+                        let peers = self.lightning_peer_keys(env_id, a).await?;
+                        if !peers.iter().any(|p| p == b_node_id) {
+                            return Err(e);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(initiated)
+    }
+
+    /// Pubkeys of one instance's current p2p peers.
+    pub async fn lightning_peer_keys(
+        &self,
+        env_id: &str,
+        instance: &str,
+    ) -> Result<Vec<String>, OrchestrateError> {
+        let mut args: Vec<&str> = lncli_base().to_vec();
+        args.push("listpeers");
+        let buf = self.exec_in_pod(env_id, instance, args).await?;
+        parse_peer_keys(&buf)
     }
 
     /// Apply additional lightning instances into an existing env's
@@ -1143,6 +1226,7 @@ mod tests {
         assert!(manifest.contains("secretName: lnd-ln-smoke-tls"));
         assert!(manifest.contains("--tlscertpath=/root/.lnd/tls/tls.crt"));
         assert!(manifest.contains("--tlskeypath=/root/.lnd/tls/tls.key"));
+        assert!(manifest.contains("--nobootstrap"));
         assert!(!manifest.contains("EXTRA_HOST"));
         assert!(!manifest.contains("tlsextra"));
     }
@@ -1168,6 +1252,22 @@ mod tests {
     fn malformed_getinfo_output_is_an_error() {
         assert!(parse_node_id(b"{}").is_err());
         assert!(parse_node_id(b"not json").is_err());
+    }
+
+    #[test]
+    fn listpeers_yields_peer_pubkeys() {
+        let out = br#"{"peers": [{"pub_key": "02aa", "address": "10.42.0.21:9735"},
+                             {"pub_key": "03bb", "address": "10.42.0.22:9735"}]}"#;
+        assert_eq!(parse_peer_keys(out).unwrap(), vec!["02aa", "03bb"]);
+    }
+
+    #[test]
+    fn listpeers_without_peers_is_empty() {
+        assert_eq!(
+            parse_peer_keys(br#"{"peers": []}"#).unwrap(),
+            Vec::<String>::new()
+        );
+        assert!(parse_peer_keys(b"not json").is_err());
     }
 
     use super::*;

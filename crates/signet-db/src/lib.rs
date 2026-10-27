@@ -252,6 +252,22 @@ fn free_port_triple(base: i32, max: i32, held: &[i32]) -> Option<i32> {
 /// Allocate one REST/gRPC/p2p port triple per requested instance inside
 /// the published lightning range. Ports held by live environments stay
 /// reserved; destroyed and expired environments release theirs.
+/// (environment_id, instance name) pairs for live environments. The mesh
+/// reconciler groups them to keep sibling instances peered across pod
+/// restarts; stopped, expired, and destroyed environments are excluded.
+pub async fn lightning_mesh_targets(pool: &PgPool) -> Result<Vec<(Uuid, String)>, DbError> {
+    sqlx::query_as::<_, (Uuid, String)>(
+        "select el.environment_id, el.name \
+         from environment_lightning el \
+         join environments e on e.id = el.environment_id \
+         where e.status in ('provisioning', 'ready') \
+         order by el.environment_id, el.name",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(DbError::from)
+}
+
 pub async fn next_lightning_ports(
     pool: &PgPool,
     base: i32,
