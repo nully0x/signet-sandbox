@@ -235,10 +235,11 @@ self-signed with CA:TRUE — Go tolerates it, rustls/webpki does not):
 per instance a small CA signs a CA:FALSE leaf whose SANs cover
 `localhost`, `127.0.0.1`, the instance's in-cluster DNS names, and the
 deployment host. LND serves the leaf+CA chain from the
-`lnd-<instance>-tls` secret. The bundle's `tls_cert` carries the CA:
-pin it as a root and standard verification applies. Clients
-authenticate with the macaroon (REST: `Grpc-Metadata-macaroon` header;
-gRPC: macaroon + cert).
+`lnd-<instance>-tls` secret. The bundle's `tls_cert` carries the CA
+hex-encoded (the PEM file bytes, `xxd -p` form; the macaroon ships hex
+too): hex-decode it and pin it as a root — standard verification
+applies. Clients authenticate with the macaroon (REST:
+`Grpc-Metadata-macaroon` header; gRPC: macaroon + cert).
 
 Deployments that prefer names can still front the ports with wildcard
 DNS or a reverse proxy — signet does not require it.

@@ -799,9 +799,9 @@ impl Orchestrator {
         Ok(encode_hex(&buf))
     }
 
-    /// The instance's TLS CA (PEM). The orchestrator provisions it per
-    /// instance; clients pin it as a root. Public material — only the
-    /// macaroon is a secret.
+    /// The instance's TLS CA as hex of the PEM file bytes — the same
+    /// bytes `xxd -p` produces. Public material; clients pin it as a
+    /// root. Only the macaroon is a secret.
     pub async fn lightning_tls_ca(
         &self,
         env_id: &str,
@@ -814,7 +814,7 @@ impl Orchestrator {
             .data
             .as_ref()
             .and_then(|entries| entries.get("ca.crt"))
-            .map(|bytes| String::from_utf8_lossy(&bytes.0).to_string())
+            .map(|bytes| encode_hex(&bytes.0))
             .ok_or_else(|| {
                 OrchestrateError::Exec(format!("secret lnd-{instance}-tls has no ca.crt"))
             })

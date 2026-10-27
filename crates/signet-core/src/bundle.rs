@@ -23,8 +23,9 @@ pub struct LightningConnection {
     pub node_uri: String,
     pub rest_url: String,
     pub grpc_url: String,
-    /// Instance TLS CA in PEM form. Public material; clients pin it as
-    /// a root — the served leaf chains to it.
+    /// Hex of the PEM file bytes of the instance TLS CA (xxd -p form).
+    /// Public material; clients hex-decode and pin it as a root — the
+    /// served leaf chains to it.
     pub tls_cert: String,
     pub auth: BundleAuth,
 }
@@ -109,7 +110,7 @@ mod tests {
                 node_uri: "02aa55@example:21002".into(),
                 rest_url: "https://example/env/ln/rest".into(),
                 grpc_url: "https://example/env/ln/grpc".into(),
-                tls_cert: "-----BEGIN CERTIFICATE-----".into(),
+                tls_cert: "2d2d2d2d2d".into(),
                 auth: BundleAuth {
                     kind: "macaroon".into(),
                     value: "0201".into(),
@@ -133,7 +134,7 @@ mod tests {
                 node_uri: "02aa55@example:21002".into(),
                 rest_url: "https://example/ln".into(),
                 grpc_url: "https://example/ln-grpc".into(),
-                tls_cert: "-----BEGIN CERTIFICATE-----".into(),
+                tls_cert: "2d2d2d2d2d".into(),
                 auth: BundleAuth {
                     kind: "macaroon".into(),
                     value: "0202".into(),

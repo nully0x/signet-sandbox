@@ -74,6 +74,7 @@ export interface LightningConnection {
   node_uri: string
   rest_url: string
   grpc_url: string
+  /** Hex of the PEM file bytes of the instance CA (xxd -p form) */
   tls_cert: string
   auth: BundleAuth
 }
