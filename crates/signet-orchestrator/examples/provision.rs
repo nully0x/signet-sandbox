@@ -9,8 +9,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let env_id = args.next().expect("missing env id");
 
     let env_host = std::env::var("SIGNET_ENV_HOST").unwrap_or_else(|_| "localhost".into());
-    let ln_host = std::env::var("SIGNET_LN_HOST").ok();
-    let orchestrator = Orchestrator::connect(&env_host, ln_host.as_deref()).await?;
+    let orchestrator = Orchestrator::connect(&env_host).await?;
     match action.as_str() {
         "create" => {
             let mut ttl_secs: Option<i64> = None;

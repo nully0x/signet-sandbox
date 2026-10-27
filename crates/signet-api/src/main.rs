@@ -30,13 +30,6 @@ struct Args {
     )]
     env_host: String,
 
-    #[arg(
-        long,
-        env = "SIGNET_LN_HOST",
-        help = "Public host for lightning endpoint URLs and TLS SANs; defaults to the env host"
-    )]
-    ln_host: Option<String>,
-
     #[arg(long, env = "DATABASE_URL")]
     database_url: String,
 
@@ -76,10 +69,9 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let pool = signet_db::connect(&args.database_url).await?;
-    let orchestrator =
-        signet_orchestrator::Orchestrator::connect(&args.env_host, args.ln_host.as_deref())
-            .await
-            .map_err(|e| anyhow::anyhow!("kube client: {e}"))?;
+    let orchestrator = signet_orchestrator::Orchestrator::connect(&args.env_host)
+        .await
+        .map_err(|e| anyhow::anyhow!("kube client: {e}"))?;
 
     if args.nip98_max_age_secs == 0 {
         tracing::warn!(
