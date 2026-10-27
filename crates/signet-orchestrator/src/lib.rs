@@ -422,6 +422,26 @@ fn split_url_base(base: &str) -> (String, String) {
     }
 }
 
+// The lightning public host: the non-empty override wins, else the env
+// host's host part without port. An empty override keeps the default
+// single-knob shape (blank env vars are harmless).
+fn resolve_ln_host(env_host: &str, ln_host: Option<&str>) -> String {
+    match ln_host.map(str::trim).filter(|h| !h.is_empty()) {
+        Some(h) => split_url_base(h)
+            .1
+            .split(':')
+            .next()
+            .unwrap_or_default()
+            .to_string(),
+        None => split_url_base(env_host)
+            .1
+            .split(':')
+            .next()
+            .unwrap_or_default()
+            .to_string(),
+    }
+}
+
 fn gateway_api(version: &str, kind: &str, plural: &str) -> ApiResource {
     ApiResource {
         group: "gateway.networking.k8s.io".to_string(),
@@ -498,14 +518,17 @@ pub struct Orchestrator {
     env_host: String,
     /// Host part of env_host (no scheme, no port): the name lightning
     /// endpoint URLs use, and the cert SAN when it is an IP or domain.
+    /// An explicit `--ln-host` override keeps the explorer's
+    /// `env-<id>.<env_host>` wildcard intact while lightning clients
+    /// dial a LAN IP or a different domain.
     ln_host: String,
     url_scheme: String,
 }
 
 impl Orchestrator {
-    pub async fn connect(env_host: &str) -> Result<Self, OrchestrateError> {
+    pub async fn connect(env_host: &str, ln_host: Option<&str>) -> Result<Self, OrchestrateError> {
         let (url_scheme, host) = split_url_base(env_host);
-        let ln_host = host.split(':').next().unwrap_or_default().to_string();
+        let ln_host = resolve_ln_host(env_host, ln_host);
         Ok(Self {
             client: Client::try_default().await?,
             env_host: host,
@@ -857,9 +880,9 @@ impl Orchestrator {
     }
 
     /// Cross-connect every instance pair in one environment. Idempotent:
-    /// pairs that are already peered are skipped (an `already connected`
-    /// race fails the call and the caller retries). Returns the number of
-    /// new connections initiated. Fails while any wallet is still being
+    /// pairs that are already peered are never re-connected (a repeated
+    /// ConnectPeer makes lnd log an error). Returns the number of new
+    /// connections initiated. Fails while any wallet is still being
     /// created — callers treat that as "not ready yet" and retry.
     pub async fn mesh_lightning_peers(
         &self,
@@ -875,7 +898,15 @@ impl Orchestrator {
         }
         let mut initiated = 0;
         for (a_idx, a) in instances.iter().enumerate() {
+            // Only connect pairs that are not peered yet: a repeated
+            // ConnectPeer on a live connection makes lnd log an error
+            // every reconcile pass (Polar checks first for the same
+            // reason).
+            let a_peers = self.lightning_peer_keys(env_id, a).await?;
             for (b, b_node_id) in instances.iter().zip(&node_ids).skip(a_idx + 1) {
+                if a_peers.iter().any(|p| p == b_node_id) {
+                    continue;
+                }
                 match self.lightning_connect_peer(env_id, a, b_node_id, b).await {
                     Ok(()) => initiated += 1,
                     // A concurrent connect wins the race: already-peered
@@ -1677,6 +1708,24 @@ mod tests {
         assert_eq!(
             split_url_base("https://sandbox.signet.dev"),
             ("https".to_string(), "sandbox.signet.dev".to_string())
+        );
+    }
+
+    #[test]
+    fn ln_host_override_wins_and_defaults_to_the_env_host() {
+        assert_eq!(resolve_ln_host("http://localhost", None), "localhost");
+        assert_eq!(resolve_ln_host("http://localhost", Some("")), "localhost");
+        assert_eq!(
+            resolve_ln_host("http://localhost", Some("192.168.100.2")),
+            "192.168.100.2"
+        );
+        // Scheme and port are stripped: bundle URLs append their own port.
+        assert_eq!(
+            resolve_ln_host(
+                "https://sandbox.signet.dev",
+                Some("http://ln.signet.dev:9999")
+            ),
+            "ln.signet.dev"
         );
     }
 

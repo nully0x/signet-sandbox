@@ -210,12 +210,21 @@ grpc      https://localhost:21001
 p2p       localhost:21002              (peering — node_uri uses this)
 rest      https://192.168.100.2:21000  (from any machine — the leaf cert
                                        covers the deployment host from
-                                       SIGNET_ENV_HOST)
+                                       SIGNET_ENV_HOST, or SIGNET_LN_HOST
+                                       when set)
 ```
 
 Each lightning entry in the bundle carries `node_id` (the hex identity
 public key, read with `lncli getinfo` in the pod) and `node_uri`
 (`<node_id>@<host>:<p2p port>`) for peering.
+
+SIGNET_LN_HOST separates the two audiences: it sets the host the
+lightning URLs use (and the cert SAN) without touching the explorer's
+`env-<id>.<env_host>` wildcard hostnames. Use it when lightning clients
+dial a LAN IP or a dedicated domain while the explorer keeps name-based
+routing. Leave it unset for the single-knob default: the lightning host
+is the host part of SIGNET_ENV_HOST. Environments keep the certs they
+were provisioned with, so set the value before creating an env.
 
 The CLI seeds the same value at stack bootstrap: `signet bootstrap --host
 <ip-or-domain>` (or `signet up --host …` when the bootstrap fires). On an
