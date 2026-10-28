@@ -1,8 +1,7 @@
 # Development Guide
 
-How to run and operate Signet Sandbox in dev mode. Project background lives in
-the [README](../README.md); the checkpoint plan lives in
-[CHECKPOINTS.md](CHECKPOINTS.md).
+How to run and operate Signet Sandbox in dev mode. Project background and the
+shipped feature list live in the [README](../README.md).
 
 ## Prerequisites
 
@@ -57,24 +56,40 @@ docker build -f deploy/docker/Dockerfile.electrs \
 just images-import electrs:0.10.9
 ```
 
+### Dashboard loop
+
+The Svelte app in `ui/` is embedded in the API binary. During development the
+Vite server proxies `/api` to `:8081`, so it talks to `just dev-api` on the
+same origin path the production build uses.
+
+```bash
+npm --prefix ui install
+npm --prefix ui run dev      # vite server, proxies /api to :8081
+just ui-build                # production bundle into ui/dist
+```
+
+Debug builds read `ui/dist` from disk at request time. Rebuild the UI and
+reload; rebuilding the API is unnecessary. A release build embeds the bundle.
+
 ## Talking to the API
 
-The API listens on `:8081` (`POST /v1/rpc`). Every request needs a NIP-98
-signed Nostr event as the `Authorization` header. Mint a fresh one per
-request (the signature covers the URL and method, and stale events are
-rejected):
+The API serves `:8081`: JSON-RPC on `POST /api/rpc`, a health check on
+`GET /healthz`, and the dashboard on every other path. Authenticate with a
+NIP-98 signed Nostr event or a bearer token. To mint a NIP-98 header, sign a
+fresh event per request (the signature covers the URL and method, and stale
+events are rejected):
 
 ```bash
 SECRET=<64-hex secret key>
 HDR=$(cargo run -q -p signet-nostr --example nip98 -- \
-    http://localhost:8081/v1/rpc POST "$SECRET" | tail -1)
+    http://localhost:8081/api/rpc POST "$SECRET" | tail -1)
 ```
 
 Create an environment with pinned component versions and a TTL (values are
 tags only; the platform owns the repo mapping):
 
 ```bash
-curl -s -X POST localhost:8081/v1/rpc \
+curl -s -X POST localhost:8081/api/rpc \
     -H 'content-type: application/json' -H "$HDR" \
     -d '{
       "jsonrpc": "2.0", "id": 1,
@@ -82,7 +97,7 @@ curl -s -X POST localhost:8081/v1/rpc \
       "params": {
         "name": "my-env",
         "components": { "indexer": true, "explorer": true, "faucet": true },
-        "versions": { "bitcoind": "29.4", "electrs": "0.10.9", "explorer": "v3.3.0" },
+        "versions": { "bitcoind": "29.4", "electrs": "0.10.9", "explorer": "v3.3.1" },
         "ttl_secs": 1200
       }
     }'
@@ -121,8 +136,8 @@ Without just, the same mint is `cargo run -p signet-cli -- token --nsec
 ```bash
 SECRET=<64-hex secret key>
 HDR=$(cargo run -q -p signet-nostr --example nip98 -- \
-    http://localhost:8081/v1/rpc POST "$SECRET" | tail -1)
-curl -s -X POST localhost:8081/v1/rpc \
+    http://localhost:8081/api/rpc POST "$SECRET" | tail -1)
+curl -s -X POST localhost:8081/api/rpc \
     -H 'content-type: application/json' -H "$HDR" \
     -d '{"jsonrpc":"2.0","id":1,"method":"token.create"}' | jq -r .result.token
 ```
@@ -139,9 +154,11 @@ for the exact URL you call.
 The `signet-cli` crate is a thin JSON-RPC client for the same surface —
 `up` provisions, polls until ready, and prints the connection bundle;
 `ls` lists your environments; `stop`/`start` suspend/resume compute
-(storage persists); `get`/`fund`/`down` map to their RPC methods; `schema`
-prints the config JSON Schema. Environment arguments take an id **or**
-the environment name — names resolve server-side. Credentials come from
+(storage persists); `get`/`fund`/`down` map to their RPC methods; `delete`
+removes the record of a destroyed or expired environment; `token` mints a
+bearer token; `schema` prints the config JSON Schema. `up --ui` opens the
+dashboard once the environment is ready. Environment arguments take an id
+**or** the environment name — names resolve server-side. Credentials come from
 flags or the environment: `--token`/`SIGNET_TOKEN` (bearer, from the mint
 above) or `--nsec`/`SIGNET_NSEC` (NIP-98, signed fresh per request):
 
@@ -179,9 +196,10 @@ signet teardown        # delete the cluster (profile kept)
 `signet up` picks up `./sandbox.json` automatically when no `--config` or
 `--name` is given; `--ttl` still overrides the file's ttl.
 
-`local init` writes `~/.signet/config.toml` (generated identity + token;
-the identity is stable, the token re-mints on every init). `signet token`
-mints a fresh token from that identity for tools like Bruno. With no
+`signet bootstrap` writes `~/.signet/config.toml` (generated identity and
+token; the identity is stable, the token re-mints on every bootstrap).
+`signet token` mints a fresh token from that identity for tools like Bruno.
+With no
 `SIGNET_TOKEN`/`SIGNET_NSEC`, commands fall back to the profile token,
 and `signet up` bootstraps the whole local stack first when the api on
 `localhost:8081` is not running.
@@ -257,10 +275,11 @@ disables). Watch for `reaped expired environment namespace` in the API log.
 just verify-all         # build + workspace tests — the bar for every change
 just lint               # clippy -D warnings
 just fmt                # rustfmt
+npm --prefix ui run check   # svelte-check + tsc; verify-all does not cover the UI
 ```
 
-Checkpoint gates and their current status: [CHECKPOINTS.md](CHECKPOINTS.md).
-A checkpoint is marked `[x]` only after its gate command runs.
+The build plan and its verification gates are a local planning file and do not
+ship with the repository. The gates themselves are the `just` targets below.
 
 ## Troubleshooting
 

@@ -3,7 +3,7 @@
 // the npub stable across local runs.
 //
 //   AUTH=$(cargo run -q -p signet-api --example rpc-client -- http://localhost:8081)
-//   curl -s http://localhost:8081/v1/rpc \
+//   curl -s http://localhost:8081/api/rpc \
 //     -H "Authorization: Nostr $AUTH" -H 'content-type: application/json' \
 //     -d '{"jsonrpc":"2.0","id":1,"method":"environment.create","params":{...}}'
 use base64::Engine as _;
@@ -30,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let created_at = Timestamp::now() - Timestamp::from_secs(SKEW_BACK_SECS);
     let event = EventBuilder::new(Kind::HttpAuth, "")
         .tags(vec![
-            Tag::custom("u", [format!("{public_url}/v1/rpc")]),
+            Tag::custom("u", [format!("{public_url}/api/rpc")]),
             Tag::custom("method", [&http_method]),
         ])
         .custom_created_at(created_at)
