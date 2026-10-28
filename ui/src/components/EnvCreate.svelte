@@ -16,9 +16,9 @@
   const DNS_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/
   const TTL = /^[0-9]+[smhd]$/
 
-  // Lightning needs the indexer: the server forces it on, the form
-  // mirrors that instead of letting the user think it is optional.
-  const indexer = $derived(instances.length > 0 || wantIndexer)
+  // Lightning does not need the indexer; electrs is an opt-in
+  // component for wallets that track on-chain state via Electrum.
+  const indexer = $derived(wantIndexer)
   const invalidInstances = $derived(
     instances.filter((n) => !DNS_LABEL.test(n)),
   )
@@ -86,12 +86,9 @@
 
   <div class="field">
     <span class="field-label">components</span>
-    <label class="check"><input type="checkbox" bind:checked={wantIndexer} disabled={instances.length > 0} /> indexer (electrs)</label>
+    <label class="check"><input type="checkbox" bind:checked={wantIndexer} /> indexer (electrs)</label>
     <label class="check"><input type="checkbox" bind:checked={faucet} /> faucet</label>
     <label class="check"><input type="checkbox" bind:checked={explorer} /> explorer (mempool)</label>
-    {#if instances.length > 0}
-      <span class="hint">indexer is required by lightning and locked on</span>
-    {/if}
   </div>
 
   <div class="field">

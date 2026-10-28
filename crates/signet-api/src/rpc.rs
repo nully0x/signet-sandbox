@@ -375,8 +375,9 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
         return Response::error(Some(id), Error::new(INVALID_PARAMS, message));
     }
 
-    // Lightning needs the indexer: force it on rather than reject.
-    let indexer = params.components.indexer || !params.components.lightning.is_empty();
+    // Lightning needs only the chain backend; electrs stays opt-in for
+    // wallets that track on-chain state over Electrum.
+    let indexer = params.components.indexer;
 
     let env_id = Uuid::now_v7();
     let key = signet_signer::generate_key();
@@ -771,16 +772,6 @@ async fn environment_update(state: &AppState, id: Id, caller: Caller, params: Va
 
     if let Err(message) = validate_lightning(&params.components.lightning) {
         return Response::error(Some(id), Error::new(INVALID_PARAMS, message));
-    }
-
-    if !params.components.lightning.is_empty() && !row.component_indexer {
-        return Response::error(
-            Some(id),
-            Error::new(
-                INVALID_PARAMS,
-                "adding lightning requires the indexer component",
-            ),
-        );
     }
 
     let existing = match signet_db::get_lightning_instances(&state.pool, row.id).await {
