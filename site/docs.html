@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0c1013">
+    <meta name="description" content="How to use Signet Sandbox: provision an environment, read the connection bundle, connect an application, and manage the lifecycle.">
+    <title>Docs | Signet Sandbox</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="container header-inner">
+        <a class="brand" href="/" aria-label="Signet Sandbox home">
+          <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <rect x="1" y="2" width="22" height="6" rx="1"></rect>
+            <rect x="1" y="9.5" width="15" height="6" rx="1"></rect>
+            <rect x="1" y="17" width="19" height="6" rx="1"></rect>
+          </svg>
+          signet sandbox
+        </a>
+        <nav aria-label="Main navigation">
+          <a class="nav-section" href="/#bundle">Bundle</a>
+          <a class="nav-section" href="/#components">Components</a>
+          <a class="nav-section" href="/#how">How it works</a>
+          <a href="/docs.html" aria-current="page">Docs</a>
+          <a class="nav-source" href="https://github.com/nully0x/signet-sandbox">GitHub <span aria-hidden="true">↗</span></a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="container docs-layout">
+      <aside class="docs-nav" aria-label="Documentation contents">
+        <p class="mono">CONTENTS</p>
+        <ul>
+          <li><a href="#first-environment">First environment</a></li>
+          <li><a href="#configure">Configure</a></li>
+          <li><a href="#bundle-fields">The bundle</a></li>
+          <li><a href="#connect">Connect an application</a></li>
+          <li><a href="#lightning">Lightning</a></li>
+          <li><a href="#manage">Manage and tear down</a></li>
+          <li><a href="#api">Call the API</a></li>
+          <li><a href="#troubleshooting">Troubleshooting</a></li>
+        </ul>
+      </aside>
+
+      <article class="docs-body">
+        <p class="eyebrow">DOCUMENTATION</p>
+        <h1>Provision a chain. Connect your app.</h1>
+        <p class="docs-lead">This page covers using Signet Sandbox. Setup for people who change the code lives in the repository, which the GitHub link in the header opens.</p>
+
+        <section id="first-environment">
+          <h2>First environment</h2>
+          <p>Docker is the only runtime prerequisite. Start the daemon before you begin.</p>
+          <p>Install the CLI once from a checkout, then provision. The binary lands in your local bin directory.</p>
+          <pre class="code-block"><span class="prompt">$ </span>just install-cli                        # with the devshell
+<span class="prompt">$ </span>cargo install --path crates/signet-cli  # or with cargo alone
+<span class="prompt">$ </span>signet up --name my-app --ttl 2h</pre>
+          <p>If no API is running, <code>up</code> builds the local stack first. Expect about a minute on the first run, because the signer premines 101 blocks. A warm stack provisions in about 20 seconds.</p>
+          <p>When provisioning finishes, the connection bundle prints. Read it again at any time:</p>
+          <pre class="code-block"><span class="prompt">$ </span>signet get my-app --json
+<span class="prompt">$ </span>signet fund my-app tb1qexampleaddress --amount 100000</pre>
+          <p>Every command that takes an environment accepts the id or the name. Names resolve on the server.</p>
+        </section>
+
+        <section id="configure">
+          <h2>Configure</h2>
+          <p>Pass flags, or keep a file named <code>sandbox.json</code> in the working directory and <code>up</code> reads it. An explicit <code>--config</code> path also works, and <code>--name</code> and <code>--ttl</code> override the file.</p>
+          <pre class="code-block">{
+  "name": "my-app",
+  "ttl": "2h",
+  "components": {
+    "indexer": true,
+    "explorer": false,
+    "faucet": true,
+    "lightning": [
+      { "name": "ln-alice", "implementation": "lnd" },
+      { "name": "ln-bob", "implementation": "lnd" }
+    ]
+  },
+  "versions": { "bitcoind": "29.4" }
+}</pre>
+          <table class="docs-table">
+            <thead>
+              <tr><th scope="col">Field</th><th scope="col">Meaning</th></tr>
+            </thead>
+            <tbody>
+              <tr><th scope="row">name</th><td>Environment name, unique per identity</td></tr>
+              <tr><th scope="row">ttl</th><td>Human duration: <code>30m</code>, <code>2h</code>, <code>1d</code>. The API field is <code>ttl_secs</code></td></tr>
+              <tr><th scope="row">components</th><td><code>indexer</code>, <code>explorer</code>, and <code>faucet</code> are booleans. <code>lightning</code> is a list of named instances</td></tr>
+              <tr><th scope="row">versions</th><td>Pin component tags. Keys are component names, values are tags</td></tr>
+            </tbody>
+          </table>
+          <p>The chain and its block signer always come up. Everything else is optional, and a disabled component is omitted from the bundle rather than returned as null.</p>
+          <p>Only <code>lnd</code> is available as a Lightning implementation. Instance names become Kubernetes resource names, so use lowercase letters, digits, and hyphens, and stay within 63 characters.</p>
+          <p>Print the full schema when you need field-level detail:</p>
+          <pre class="code-block"><span class="prompt">$ </span>signet schema</pre>
+        </section>
+
+        <section id="bundle-fields">
+          <h2>The bundle</h2>
+          <p>One object carries every endpoint and every credential your application needs.</p>
+          <table class="docs-table">
+            <thead>
+              <tr><th scope="col">Field</th><th scope="col">Use</th></tr>
+            </thead>
+            <tbody>
+              <tr><th scope="row">rpc_url</th><td>Bitcoin Core JSON-RPC</td></tr>
+              <tr><th scope="row">rpc_auth</th><td>Basic auth value, <code>user:password</code></td></tr>
+              <tr><th scope="row">indexer_endpoint</th><td>Electrum endpoint for wallets, when the indexer is enabled</td></tr>
+              <tr><th scope="row">explorer_url</th><td>Browser view of blocks and transactions</td></tr>
+              <tr><th scope="row">faucet_url</th><td>Faucet, or use <code>signet fund</code></td></tr>
+              <tr><th scope="row">lightning</th><td>Map keyed by instance name, each entry described below</td></tr>
+              <tr><th scope="row">signet_challenge</th><td>The challenge for this chain. Two environments never share one</td></tr>
+              <tr><th scope="row">block_policy</th><td><code>interval_30s</code> or <code>on_demand</code></td></tr>
+              <tr><th scope="row">expires_at</th><td>Wall-clock expiry, when a TTL was set</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="connect">
+          <h2>Connect an application</h2>
+          <h3>Bitcoin RPC</h3>
+          <p>Point your client at <code>rpc_url</code> and send <code>rpc_auth</code> as basic auth. The node runs on a custom signet, so the client must not expect the public signet chain.</p>
+          <h3>Electrum wallet</h3>
+          <p>Connect to <code>indexer_endpoint</code>. It is a plain endpoint with no authentication, reachable from the machine that runs the stack.</p>
+          <h3>Explorer</h3>
+          <p>Open <code>explorer_url</code> in a browser. The hostname routes through the local gateway, so an explorer hostname needs a hosts entry when you open it from another machine.</p>
+          <h3>Faucet</h3>
+          <p>Fund any address that belongs to that chain. Use the CLI, or post to <code>faucet_url</code> with the environment credentials.</p>
+          <h3>Remote callers</h3>
+          <p>Endpoints default to localhost. Bootstrap with an IP or a domain to make them reachable from other machines, and use the same value everywhere:</p>
+          <pre class="code-block"><span class="prompt">$ </span>signet bootstrap --host 192.168.100.2</pre>
+          <p>The advertised host is also the certificate name and the explorer hostname base. Changing it on a running stack requires a new bootstrap, and a signed request must be minted for the new URL.</p>
+        </section>
+
+        <section id="lightning">
+          <h2>Lightning</h2>
+          <p>Each instance is reachable by port, not by name. Three consecutive ports serve REST, gRPC, and peering. The range is 21000 to 21199.</p>
+          <pre class="code-block">rest   https://localhost:21000
+grpc   https://localhost:21001
+p2p    localhost:21002</pre>
+          <p>Each entry in the map carries <code>rest_url</code>, <code>grpc_url</code>, <code>tls_cert</code>, the <code>auth</code> object with a macaroon, <code>node_id</code>, and <code>node_uri</code>.</p>
+          <h3>Authentication and TLS</h3>
+          <p>The macaroon ships hex-encoded. REST clients send it as the <code>Grpc-Metadata-macaroon</code> header. gRPC clients send the macaroon and trust the certificate.</p>
+          <p>The bundle's <code>tls_cert</code> is the CA, hex-encoded PEM. Decode it and pin it as a root. The served leaf chains to it and covers localhost, the in-cluster names, and the advertised host. Do not disable verification, because the environment exists to behave like the real thing.</p>
+          <h3>Peering and channels</h3>
+          <p>Instances peer automatically after create. Channels stay manual, because channel liquidity is usually the thing under test. Open, pay, and close with <code>lncli</code> inside the pod, or from a client that uses <code>node_uri</code>.</p>
+          <p>Nodes start with an empty wallet. Fund an address first, then open a channel.</p>
+        </section>
+
+        <section id="manage">
+          <h2>Manage and tear down</h2>
+          <table class="docs-table">
+            <thead>
+              <tr><th scope="col">Command</th><th scope="col">Effect</th></tr>
+            </thead>
+            <tbody>
+              <tr><th scope="row">signet ls</th><td>List your environments with status and expiry</td></tr>
+              <tr><th scope="row">signet get</th><td>Print the bundle for one environment</td></tr>
+              <tr><th scope="row">signet fund</th><td>Send coin from the faucet to an address</td></tr>
+              <tr><th scope="row">signet stop</th><td>Scale compute to zero and keep storage. The chain survives</td></tr>
+              <tr><th scope="row">signet start</th><td>Resume a stopped environment</td></tr>
+              <tr><th scope="row">signet down</th><td>Delete the namespace and the chain</td></tr>
+              <tr><th scope="row">signet delete</th><td>Remove the record of a destroyed or expired environment</td></tr>
+              <tr><th scope="row">signet status</th><td>Report the local stack, API health, and identity</td></tr>
+              <tr><th scope="row">signet teardown</th><td>Delete the local stack. The profile is kept</td></tr>
+            </tbody>
+          </table>
+          <h3>Expiry</h3>
+          <p>An environment created with a TTL carries an expiry time. A background reaper deletes the namespace after that time passes. Stopping an environment does not pause the clock, so a stopped environment still expires.</p>
+          <p>Names are scoped to your identity. A name held by a destroyed or expired record is free to use again.</p>
+        </section>
+
+        <section id="api">
+          <h2>Call the API</h2>
+          <p>The CLI is one client. For CI and applications, call the same API directly: JSON-RPC on <code>POST /api/rpc</code>, with a health check on <code>GET /healthz</code>. Failures are error objects inside HTTP 200, never HTTP status codes.</p>
+          <dl class="docs-errors">
+            <dt><code>-32002</code></dt>
+            <dd>Unauthenticated. The header is missing, stale, or does not match the URL or method.</dd>
+            <dt><code>-32004</code></dt>
+            <dd>Not the owner. Environments belong to the identity that created them.</dd>
+            <dt><code>-32602</code></dt>
+            <dd>Invalid params. An unknown version key, a bad instance name, or a non-positive <code>ttl_secs</code>.</dd>
+            <dt><code>-32030</code></dt>
+            <dd>Wrong lifecycle state. Stop requires <code>ready</code>, and start requires <code>stopped</code>.</dd>
+          </dl>
+          <h3>Authentication</h3>
+          <p>Mint a bearer token and send it in the <code>Authorization</code> header. The token is shown once, and only its hash is stored.</p>
+          <pre class="code-block"><span class="prompt">$ </span>signet token
+<span class="prompt">$ </span>export SIGNET_TOKEN=sgn_...</pre>
+          <p>The CLI reads the token from the environment or from <code>--token</code>, and it reads the API base URL from <code>SIGNET_API</code> or <code>--api</code>. Bearer callers cannot mint new tokens, so a new token needs the identity that owns the environments.</p>
+          <p>The alternative is a signed request. Send a Nostr event of kind 27235 as <code>Authorization: Nostr base64(event)</code>, with a <code>u</code> tag holding the exact request URL and a <code>method</code> tag holding the HTTP verb. Events expire after 300 seconds, so mint one per request.</p>
+          <h3>Create an environment</h3>
+          <pre class="code-block"><span class="prompt">$ </span>curl -s -X POST localhost:8081/api/rpc \
+    -H 'content-type: application/json' \
+    -H "Authorization: Bearer $SIGNET_TOKEN" \
+    -d '{
+      "jsonrpc": "2.0", "id": 1,
+      "method": "environment.create",
+      "params": {
+        "name": "ci-env",
+        "components": { "indexer": true, "faucet": true },
+        "versions": { "bitcoind": "29.4" },
+        "ttl_secs": 1200
+      }
+    }'</pre>
+          <p>The response echoes the resolved images and the expiry time. The same calls drive the CLI, so a pipeline can create an environment, read the bundle, run its tests, and call <code>environment.destroy</code>.</p>
+        </section>
+
+        <section id="troubleshooting">
+          <h2>Troubleshooting</h2>
+          <h3>The CLI cannot reach the API</h3>
+          <p>Start the local stack with <code>signet up</code>, or check what is running with <code>signet status</code>.</p>
+          <h3>The first environment is slow</h3>
+          <p>The signer premines 101 blocks before the chain is usable. Expect about a minute on the first run, and about 20 seconds with a warm stack.</p>
+          <h3>An endpoint works on one machine only</h3>
+          <p>Endpoints default to localhost. Re-bootstrap with <code>--host</code> set to an address the other machine can reach, then read the bundle again for the new URLs.</p>
+          <h3>A signed request fails after a host change</h3>
+          <p>The signed URL must match the URL the server receives. Mint a new header for the new URL.</p>
+          <h3>The explorer does not open from another machine</h3>
+          <p>The gateway routes by hostname, so add a hosts entry for the environment's explorer hostname on the machine that opens it.</p>
+          <h3>A Lightning name is rejected</h3>
+          <p>Use lowercase letters, digits, and hyphens, start with a letter or digit, and keep the name within 63 characters. Names must be unique inside one environment.</p>
+          <h3>A channel will not open</h3>
+          <p>Fund the node before opening a channel. Instances peer automatically, but they start with an empty wallet and no channels.</p>
+          <h3>An environment disappeared</h3>
+          <p>The TTL expired and the reaper removed it. Stopping does not pause the clock, so choose a TTL that covers the work.</p>
+        </section>
+      </article>
+    </main>
+
+    <footer class="site-footer container">
+      <a class="brand" href="/">signet sandbox</a>
+      <span>Built in Rust. Open source under MIT.</span>
+      <div>
+        <a href="/">Home <span aria-hidden="true">↗</span></a>
+        <a href="/docs.html">Docs</a>
+        <a href="https://github.com/nully0x/signet-sandbox">Source <span aria-hidden="true">↗</span></a>
+      </div>
+    </footer>
+  </body>
+</html>
