@@ -35,8 +35,7 @@
         <p class="mono">CONTENTS</p>
         <ul>
           <li><a href="#install">Install</a></li>
-          <li><a href="#start">Start the stack</a></li>
-          <li><a href="#first-environment">First environment</a></li>
+          <li><a href="#getting-started">Getting started</a></li>
           <li><a href="#configure">Configure</a></li>
           <li><a href="#bundle-fields">The bundle</a></li>
           <li><a href="#connect">Connect an application</a></li>
@@ -69,29 +68,35 @@
           <p>Docker is the only runtime prerequisite. Start the daemon before you provision anything.</p>
         </section>
 
-        <section id="start">
-          <h2>Start the stack</h2>
-          <p><code>bootstrap</code> creates the local cluster, loads the images, starts the API and its database, and writes a profile. That profile identity owns every environment you create.</p>
-          <pre class="code-block"><span class="prompt">$ </span>signet bootstrap</pre>
-          <p>Endpoints default to localhost, which limits them to this machine. Set the advertised host at the first bootstrap when other machines must reach the endpoints:</p>
-          <pre class="code-block"><span class="prompt">$ </span>signet bootstrap --host 192.168.100.2</pre>
-          <p>The advertised host is the endpoint host, the certificate name, and the explorer hostname base. To change it on a running stack, run bootstrap again with the new value, and mint new credentials for the new URLs.</p>
-          <h3>Starting through up</h3>
-          <p><code>up</code> starts the stack itself when the API is not running, and forwards its own <code>--host</code> to that bootstrap. Run <code>bootstrap</code> yourself when the host must be set, or when you want the stack ready before the first environment.</p>
-          <h3>Status and teardown</h3>
-          <pre class="code-block"><span class="prompt">$ </span>signet status
-<span class="prompt">$ </span>signet teardown</pre>
-          <p>Teardown deletes the cluster and every environment in it. The profile is kept, so the identity keeps ownership of what you create next.</p>
-        </section>
+        <section id="getting-started">
+          <h2>Getting started</h2>
+          <p>Four steps take you from an installed CLI to a running chain with a funded address.</p>
 
-        <section id="first-environment">
-          <h2>First environment</h2>
-          <pre class="code-block"><span class="prompt">$ </span>signet up --name my-app --ttl 2h</pre>
-          <p>Expect about a minute on the first run, because the signer premines 101 blocks. A warm stack provisions in about 20 seconds.</p>
-          <p>When provisioning finishes, the connection bundle prints. Read it again at any time, then fund an address:</p>
+          <h3>Step 1. Bootstrap the stack</h3>
+          <p><code>bootstrap</code> creates the local cluster, loads the images, starts the API with its database, and writes a profile. That profile identity owns every environment you create. The API also serves the dashboard.</p>
+          <pre class="code-block"><span class="prompt">$ </span>signet bootstrap</pre>
+          <p>Pass the advertised host when other machines must reach the endpoints:</p>
+          <pre class="code-block"><span class="prompt">$ </span>signet bootstrap --host 192.168.100.2</pre>
+          <p>Endpoints default to localhost, which limits them to this machine. The advertised host is the endpoint host, the certificate name, and the explorer hostname base. Choose it at the first bootstrap, because the flag does nothing on a stack that already runs. To change it later, run <code>signet bootstrap --host</code> again with the new value, then mint new credentials for the new URLs.</p>
+
+          <h3>Step 2. Check the stack</h3>
+          <pre class="code-block"><span class="prompt">$ </span>signet status</pre>
+          <p>The report covers the cluster, API health, and the identity that will own your environments.</p>
+
+          <h3>Step 3. Provision an environment</h3>
+          <pre class="code-block"><span class="prompt">$ </span>signet up --name my-app --ttl 2h --ui</pre>
+          <p>Expect about a minute on the first run, because the signer premines 101 blocks. A warm stack provisions in about 20 seconds. <code>--ui</code> opens the dashboard once the environment is ready; drop it when you work from the terminal only.</p>
+          <p><code>up</code> also starts the stack itself when the API is not running, and forwards its own <code>--host</code> to that bootstrap. Run <code>bootstrap</code> first when the host must be set, or when you want the stack running before the first environment.</p>
+
+          <h3>Step 4. Read the bundle and fund an address</h3>
+          <p>Provisioning prints the connection bundle. Read it again at any time, then send coin to an address:</p>
           <pre class="code-block"><span class="prompt">$ </span>signet get my-app --json
 <span class="prompt">$ </span>signet fund my-app tb1qexampleaddress --amount 100000</pre>
           <p>Every command that takes an environment accepts the id or the name. Names resolve on the server.</p>
+
+          <h3>Tear down</h3>
+          <pre class="code-block"><span class="prompt">$ </span>signet teardown</pre>
+          <p>Teardown deletes the cluster and every environment in it. The profile is kept, so the identity keeps ownership of what you create next.</p>
         </section>
 
         <section id="configure">
@@ -160,7 +165,7 @@
           <h3>Faucet</h3>
           <p>Fund any address that belongs to that chain. Use the CLI, or post to <code>faucet_url</code> with the environment credentials.</p>
           <h3>Remote callers</h3>
-          <p>Endpoints default to localhost. When another machine must connect, set the advertised host at the first bootstrap, as shown in <a href="#start">Start the stack</a>, and read the bundle again for the new URLs.</p>
+          <p>Endpoints default to localhost. When another machine must connect, set the advertised host at the first bootstrap, as shown in <a href="#getting-started">Getting started</a>, and read the bundle again for the new URLs.</p>
         </section>
 
         <section id="lightning">
@@ -261,7 +266,7 @@ p2p    localhost:21002</pre>
 
     <footer class="site-footer container">
       <a class="brand" href="/">signet sandbox</a>
-      <span>Built in Rust. Open source under MIT.</span>
+      <span>Open source under MIT.</span>
       <div>
         <a href="/">Home <span aria-hidden="true">↗</span></a>
         <a href="/docs.html">Docs</a>

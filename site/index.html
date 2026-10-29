@@ -35,7 +35,7 @@
 
     <main>
       <section class="hero container" aria-labelledby="hero-title">
-        <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> OPEN SOURCE · MIT · BUILT IN RUST</p>
+        <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> OPEN SOURCE · MIT</p>
         <h1 id="hero-title">Your own signet.<br><span>One call.</span></h1>
         <p class="hero-description">Signet Sandbox provisions an isolated Bitcoin chain per team. Bitcoind in signet mode, a custom BIP325 block signer, and the services your application needs. Every call returns a connection bundle. A TTL deletes the environment when time is up.</p>
         <div class="hero-actions">
@@ -72,16 +72,17 @@
               <span class="step-number">01</span>
               <div>
                 <strong>Bootstrap the local stack</strong>
-                <p>Creates the cluster, imports the images, starts the API, and writes a local identity.</p>
-                <pre class="code-block compact"><span class="prompt">$ </span>signet bootstrap</pre>
+                <p>Creates the cluster, imports the images, starts the API, and writes a local identity. Pass the host at this step when other machines must reach the endpoints.</p>
+                <pre class="code-block compact"><span class="prompt">$ </span>signet bootstrap
+<span class="prompt">$ </span>signet bootstrap --host 192.168.100.2</pre>
               </div>
             </li>
             <li>
               <span class="step-number">02</span>
               <div>
                 <strong>Provision</strong>
-                <p>Waits until the environment is ready. The first run premines 101 blocks.</p>
-                <pre class="code-block compact"><span class="prompt">$ </span>signet up --name my-app --ttl 2h</pre>
+                <p>Waits until the environment is ready. The first run premines 101 blocks. <code>--ui</code> opens the dashboard when ready.</p>
+                <pre class="code-block compact"><span class="prompt">$ </span>signet up --name my-app --ttl 2h --ui</pre>
               </div>
             </li>
             <li>
@@ -323,7 +324,7 @@
 
     <footer class="site-footer container">
       <a class="brand" href="/">signet sandbox</a>
-      <span>Built in Rust. Open source under MIT.</span>
+      <span>Open source under MIT.</span>
       <div>
         <a href="https://github.com/nully0x/signet-sandbox">GitHub <span aria-hidden="true">↗</span></a>
         <a href="/docs.html">Docs</a>

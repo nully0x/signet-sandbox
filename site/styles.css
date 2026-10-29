@@ -393,6 +393,15 @@ h1 span {
   line-height: 1.65;
 }
 
+.steps p code {
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: #090d10;
+  color: #dbe6f0;
+  font-size: 11px;
+}
+
 /* Bundle visual */
 
 .bundle-section {
