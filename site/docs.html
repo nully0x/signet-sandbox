@@ -34,6 +34,8 @@
       <aside class="docs-nav" aria-label="Documentation contents">
         <p class="mono">CONTENTS</p>
         <ul>
+          <li><a href="#install">Install</a></li>
+          <li><a href="#start">Start the stack</a></li>
           <li><a href="#first-environment">First environment</a></li>
           <li><a href="#configure">Configure</a></li>
           <li><a href="#bundle-fields">The bundle</a></li>
@@ -50,15 +52,43 @@
         <h1>Provision a chain. Connect your app.</h1>
         <p class="docs-lead">This page covers using Signet Sandbox. Setup for people who change the code lives in the repository, which the GitHub link in the header opens.</p>
 
+        <section id="install">
+          <h2>Install</h2>
+          <p>The CLI is one binary named <code>signet</code>. Install it from a package registry, so you never clone the repository.</p>
+          <table class="docs-table">
+            <thead>
+              <tr><th scope="col">Route</th><th scope="col">Command</th><th scope="col">Status</th></tr>
+            </thead>
+            <tbody>
+              <tr><th scope="row">Cargo</th><td><code>cargo install signet-sandbox</code></td><td><span class="tag">COMING SOON</span></td></tr>
+              <tr><th scope="row">Shell installer</th><td>One-line script that picks the binary for your platform</td><td><span class="tag">COMING SOON</span></td></tr>
+              <tr><th scope="row">npm</th><td><code>npm install -g signet-sandbox</code></td><td><span class="tag">COMING SOON</span></td></tr>
+            </tbody>
+          </table>
+          <p>None of these are published yet. The commands above are the release shape, and they activate at the first CLI release. Until then, build instructions live in the repository.</p>
+          <p>Docker is the only runtime prerequisite. Start the daemon before you provision anything.</p>
+        </section>
+
+        <section id="start">
+          <h2>Start the stack</h2>
+          <p><code>bootstrap</code> creates the local cluster, loads the images, starts the API and its database, and writes a profile. That profile identity owns every environment you create.</p>
+          <pre class="code-block"><span class="prompt">$ </span>signet bootstrap</pre>
+          <p>Endpoints default to localhost, which limits them to this machine. Set the advertised host at the first bootstrap when other machines must reach the endpoints:</p>
+          <pre class="code-block"><span class="prompt">$ </span>signet bootstrap --host 192.168.100.2</pre>
+          <p>The advertised host is the endpoint host, the certificate name, and the explorer hostname base. To change it on a running stack, run bootstrap again with the new value, and mint new credentials for the new URLs.</p>
+          <h3>Starting through up</h3>
+          <p><code>up</code> starts the stack itself when the API is not running, and forwards its own <code>--host</code> to that bootstrap. Run <code>bootstrap</code> yourself when the host must be set, or when you want the stack ready before the first environment.</p>
+          <h3>Status and teardown</h3>
+          <pre class="code-block"><span class="prompt">$ </span>signet status
+<span class="prompt">$ </span>signet teardown</pre>
+          <p>Teardown deletes the cluster and every environment in it. The profile is kept, so the identity keeps ownership of what you create next.</p>
+        </section>
+
         <section id="first-environment">
           <h2>First environment</h2>
-          <p>Docker is the only runtime prerequisite. Start the daemon before you begin.</p>
-          <p>Install the CLI once from a checkout, then provision. The binary lands in your local bin directory.</p>
-          <pre class="code-block"><span class="prompt">$ </span>just install-cli                        # with the devshell
-<span class="prompt">$ </span>cargo install --path crates/signet-cli  # or with cargo alone
-<span class="prompt">$ </span>signet up --name my-app --ttl 2h</pre>
-          <p>If no API is running, <code>up</code> builds the local stack first. Expect about a minute on the first run, because the signer premines 101 blocks. A warm stack provisions in about 20 seconds.</p>
-          <p>When provisioning finishes, the connection bundle prints. Read it again at any time:</p>
+          <pre class="code-block"><span class="prompt">$ </span>signet up --name my-app --ttl 2h</pre>
+          <p>Expect about a minute on the first run, because the signer premines 101 blocks. A warm stack provisions in about 20 seconds.</p>
+          <p>When provisioning finishes, the connection bundle prints. Read it again at any time, then fund an address:</p>
           <pre class="code-block"><span class="prompt">$ </span>signet get my-app --json
 <span class="prompt">$ </span>signet fund my-app tb1qexampleaddress --amount 100000</pre>
           <p>Every command that takes an environment accepts the id or the name. Names resolve on the server.</p>
@@ -130,9 +160,7 @@
           <h3>Faucet</h3>
           <p>Fund any address that belongs to that chain. Use the CLI, or post to <code>faucet_url</code> with the environment credentials.</p>
           <h3>Remote callers</h3>
-          <p>Endpoints default to localhost. Bootstrap with an IP or a domain to make them reachable from other machines, and use the same value everywhere:</p>
-          <pre class="code-block"><span class="prompt">$ </span>signet bootstrap --host 192.168.100.2</pre>
-          <p>The advertised host is also the certificate name and the explorer hostname base. Changing it on a running stack requires a new bootstrap, and a signed request must be minted for the new URL.</p>
+          <p>Endpoints default to localhost. When another machine must connect, set the advertised host at the first bootstrap, as shown in <a href="#start">Start the stack</a>, and read the bundle again for the new URLs.</p>
         </section>
 
         <section id="lightning">

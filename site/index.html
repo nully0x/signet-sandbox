@@ -49,16 +49,14 @@
         <div class="panel">
           <div class="panel-heading">
             <h2>Install</h2>
-            <span class="mono">01 / LOCAL</span>
+            <span class="mono">01 / CLI</span>
           </div>
-          <p>Clone the repository and install the CLI. The devshell pins cargo, just, k3d, and kubectl.</p>
-          <pre class="code-block"><span class="prompt">$ </span>git clone https://github.com/nully0x/signet-sandbox
-<span class="prompt">$ </span>cd signet-sandbox
-<span class="prompt">$ </span>nix develop
-<span class="prompt">$ </span>just install-cli</pre>
+          <p>One binary named signet, installed from a package registry. No repository clone.</p>
+          <pre class="code-block"><span class="prompt">$ </span>cargo install signet-sandbox
+<span class="prompt">$ </span>npm install -g signet-sandbox</pre>
+          <p class="panel-note"><span class="tag">COMING SOON</span> Neither package is published yet. Both commands activate at the first CLI release.</p>
           <ul class="requirements">
             <li><span class="req-dot" aria-hidden="true"></span> Docker daemon, running: Docker Desktop, colima, or OrbStack</li>
-            <li><span class="req-dot" aria-hidden="true"></span> Nix for the devshell, or a Rust toolchain to build the CLI directly</li>
             <li><span class="req-dot" aria-hidden="true"></span> Nothing else. Kubernetes stays internal, and you never run kubectl</li>
           </ul>
           <a class="panel-link" href="/docs.html">Read the docs</a>
