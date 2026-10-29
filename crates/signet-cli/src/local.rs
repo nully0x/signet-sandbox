@@ -81,7 +81,11 @@ pub fn bootstrap(host: &str) -> anyhow::Result<()> {
         "profile written: {} (identity {npub})",
         crate::profile::path()?.display()
     );
-    println!("local stack ready: provisioning api on http://{host}:8081");
+    let (scheme, authority) = split_host(host);
+    println!(
+        "local stack ready: provisioning api on {} (endpoints on {scheme}://{authority})",
+        api_url(host)
+    );
     Ok(())
 }
 
@@ -512,14 +516,42 @@ fn ctr_quiet(node: &str, args: &[&str]) -> anyhow::Result<()> {
 /// Apply the postgres + api stack and wait for both rollouts. The registry
 /// placeholder is substituted so forks can point SIGNET_IMAGE_REGISTRY at
 /// their own ghcr namespace.
+/// Split a `--host`/`SIGNET_ENV_HOST` value into scheme and authority.
+/// Accepts a bare host (`192.168.100.2`), a URL (`http://192.168.100.2`),
+/// and a trailing slash. The scheme defaults to http.
+fn split_host(input: &str) -> (String, String) {
+    let (scheme, authority) = input.split_once("://").unwrap_or(("http", input));
+    (
+        scheme.to_string(),
+        authority.trim_end_matches('/').to_string(),
+    )
+}
+
+/// Public URL of the api for an advertised host value.
+pub fn api_url(host: &str) -> String {
+    let (scheme, authority) = split_host(host);
+    format!("{scheme}://{authority}:8081")
+}
+
+/// True when the advertised host is loopback, so endpoints work on this
+/// machine only.
+pub fn is_loopback_host(host: &str) -> bool {
+    let (_, authority) = split_host(host);
+    matches!(
+        authority.as_str(),
+        "localhost" | "127.0.0.1" | "[::1]" | "::1"
+    )
+}
+
 /// Render the stack manifest for the host the api should advertise:
 /// endpoint URLs and node certificates are built from this host, so
 /// remote clients resolve/connect against it.
 fn render_local_stack(host: &str) -> anyhow::Result<String> {
+    let (scheme, authority) = split_host(host);
     Ok(LOCAL_STACK_MANIFEST
         .replace("REGISTRY_PLACEHOLDER", &registry())
-        .replace("API_PUBLIC_PLACEHOLDER", &format!("http://{host}:8081"))
-        .replace("ENV_HOST_PLACEHOLDER", &format!("http://{host}")))
+        .replace("API_PUBLIC_PLACEHOLDER", &api_url(host))
+        .replace("ENV_HOST_PLACEHOLDER", &format!("{scheme}://{authority}")))
 }
 
 fn deploy_local_stack(bin: &Path, host: &str) -> anyhow::Result<()> {
@@ -578,28 +610,16 @@ fn wait_api() -> anyhow::Result<()> {
 /// Drop CustomResourceDefinition documents from a multi-doc manifest.
 /// k3s manages the gateway-api CRDs itself; EG's bundled copies must not
 /// overwrite them.
-fn strip_crd_docs(manifest: &str) -> String {
-    use serde::Deserialize as _;
-    let docs: Vec<serde_yaml::Value> = serde_yaml::Deserializer::from_str(manifest)
-        .map(|doc| serde_yaml::Value::deserialize(doc).unwrap())
-        .filter(|doc| doc["kind"].as_str() != Some("CustomResourceDefinition"))
-        .collect();
-    docs.iter()
-        .map(|doc| serde_yaml::to_string(doc).unwrap())
-        .collect::<Vec<_>>()
-        .join("---\n")
-}
-
 fn install_gateway(bin: &Path) -> anyhow::Result<()> {
     println!("installing the envoy gateway stack");
-    // k3s installs its own gateway-api CRDs at server boot; EG's bundled
-    // CRD copies conflict with them (different version sets). Apply the
-    // installer minus CRD documents — the controller runs on the CRDs k3s
-    // already provides.
+    // Apply the installer with its CRDs: k3s does not ship the gateway-api
+    // CRDs, and without them the controller crash-loops on "no matches for
+    // kind Gateway" while the rollout waits forever. Server-side apply
+    // reconciles them if a future k3s starts shipping its own copies.
     let eg_install = fetch_text(&format!(
         "https://github.com/envoyproxy/gateway/releases/download/{EG_VERSION}/install.yaml"
     ))?;
-    write_stdin_manifest(bin, &strip_crd_docs(&eg_install))?;
+    write_stdin_manifest(bin, &eg_install)?;
     run(kubectl(bin)?.args([
         "-n",
         "envoy-gateway-system",
@@ -660,6 +680,44 @@ mod tests {
                 || kubectl.contains("/bin/linux/arm64/")
                 || kubectl.contains("darwin")
         );
+    }
+
+    #[test]
+    fn host_values_normalize_to_scheme_and_authority() {
+        assert_eq!(
+            split_host("localhost"),
+            ("http".to_string(), "localhost".to_string())
+        );
+        assert_eq!(
+            split_host("192.168.100.2"),
+            ("http".to_string(), "192.168.100.2".to_string())
+        );
+        assert_eq!(
+            split_host("http://192.168.100.2/"),
+            ("http".to_string(), "192.168.100.2".to_string())
+        );
+        assert_eq!(
+            split_host("https://sandbox.example.com"),
+            ("https".to_string(), "sandbox.example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn rendered_stack_advertises_the_host_once() {
+        let manifest = render_local_stack("http://192.168.100.2/").unwrap();
+        assert!(manifest.contains("value: http://192.168.100.2:8081"));
+        assert!(manifest.contains("value: http://192.168.100.2 }"));
+        assert!(!manifest.contains("http://http://"));
+        assert!(!manifest.contains("PLACEHOLDER"));
+    }
+
+    #[test]
+    fn loopback_hosts_are_recognised() {
+        assert!(is_loopback_host("localhost"));
+        assert!(is_loopback_host("http://localhost/"));
+        assert!(is_loopback_host("127.0.0.1"));
+        assert!(!is_loopback_host("192.168.100.2"));
+        assert!(!is_loopback_host("https://sandbox.example.com"));
     }
 
     #[test]

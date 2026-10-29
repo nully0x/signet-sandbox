@@ -2,3 +2,5 @@ target/
 .git/
 .direnv/
 result
+ui/node_modules/
+ui/dist/

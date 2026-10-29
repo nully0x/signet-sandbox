@@ -3,12 +3,16 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use schemars::JsonSchema;
 use serde::Deserialize;
 use signet_core::{BlockPolicy, Components, CreateParams};
 
 use crate::duration::parse_duration_secs;
 
-#[derive(Debug, Deserialize)]
+/// The `sandbox.json` the CLI reads. `signet schema` prints this type, so
+/// the file format and the published schema cannot drift apart.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SandboxConfig {
     pub name: Option<String>,
     pub block_policy: Option<BlockPolicy>,
@@ -79,6 +83,22 @@ mod tests {
         assert!(params.components.explorer);
         assert_eq!(params.versions.as_ref().unwrap()["bitcoind"], "29.4");
         assert_eq!(params.ttl_secs, Some(3600));
+    }
+
+    #[test]
+    fn unknown_keys_are_rejected() {
+        let err = serde_json::from_str::<SandboxConfig>(r#"{ "name": "x", "ttl_secs": 3600 }"#)
+            .unwrap_err();
+        assert!(err.to_string().contains("unknown field"), "{err}");
+    }
+
+    #[test]
+    fn schema_describes_the_config_file() {
+        let schema = serde_json::to_value(schemars::schema_for!(SandboxConfig)).unwrap();
+        let props = schema["properties"].as_object().unwrap();
+        assert!(props.contains_key("ttl"), "{schema}");
+        assert!(!props.contains_key("ttl_secs"), "{schema}");
+        assert_eq!(schema["additionalProperties"], serde_json::json!(false));
     }
 
     #[test]

@@ -87,7 +87,8 @@ enum Command {
         ui: bool,
         /// Host advertised in endpoint URLs when the stack gets
         /// bootstrapped (IP or domain); defaults to localhost, which
-        /// limits endpoints to this machine
+        /// limits endpoints to this machine. Applies only when the
+        /// local stack is created.
         #[arg(long, default_value = "localhost")]
         host: String,
         #[command(flatten)]
@@ -168,7 +169,8 @@ enum Command {
     /// Create or start the local cluster and its platform stack
     Bootstrap {
         /// Host advertised in endpoint URLs (IP or domain); defaults to
-        /// localhost, which limits endpoints to this machine
+        /// localhost, which limits endpoints to this machine. Applies only
+        /// when this command bootstraps the local stack.
         #[arg(long, default_value = "localhost")]
         host: String,
     },
@@ -283,7 +285,7 @@ fn ensure_local_api(common: &Common, host: &str) -> Result<(), CliError> {
     let reachable = local::api_healthy(&common.api);
     // --host only lands when the stack gets bootstrapped; warn instead of
     // silently ignoring it on an already running stack.
-    if reachable && host != "localhost" {
+    if reachable && !local::is_loopback_host(host) {
         eprintln!(
             "note: --host only applies when the local stack is bootstrapped; \
              the api is already running — `signet bootstrap --host {host}` \
@@ -540,7 +542,7 @@ fn lifecycle(method: &str, env: &str, common: &Common) -> Result<(), CliError> {
 }
 
 fn schema() -> Result<(), CliError> {
-    let schema = schemars::schema_for!(signet_core::CreateParams);
+    let schema = schemars::schema_for!(config::SandboxConfig);
     output::print_json(&schema)?;
     Ok(())
 }
