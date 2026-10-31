@@ -1108,16 +1108,25 @@ figcaption {
   }
 
   .header-inner {
-    flex-wrap: wrap;
-    gap: 10px 16px;
-    padding-block: 12px;
+    flex-wrap: nowrap;
+    gap: 12px;
+    padding-block: 10px;
+  }
+
+  .brand {
+    font-size: 18px;
   }
 
   nav {
-    width: 100%;
+    width: auto;
+    margin-left: auto;
     justify-content: flex-end;
-    gap: 14px;
-    font-size: 12px;
+    gap: 12px;
+    font-size: 11.5px;
+  }
+
+  .nav-source {
+    padding: 7px 10px;
   }
 
   .nav-section {
@@ -1216,6 +1225,27 @@ figcaption {
 
   .site-footer {
     justify-content: flex-start;
+  }
+}
+
+@media (max-width: 380px) {
+  .brand {
+    font-size: 16px;
+    gap: 8px;
+  }
+
+  .brand-mark {
+    width: 19px;
+    height: 19px;
+  }
+
+  nav {
+    gap: 10px;
+    font-size: 11px;
+  }
+
+  .nav-source {
+    padding: 6px 8px;
   }
 }
 
