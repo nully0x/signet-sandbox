@@ -72,7 +72,7 @@
           <p>Four steps take you from an installed CLI to a running chain with a funded address.</p>
 
           <h3>Step 1. Bootstrap the stack</h3>
-          <p><code>bootstrap</code> creates the local cluster, loads the images, starts the API with its database, and writes a profile. That profile identity owns every environment you create. The API also serves the dashboard.</p>
+          <p><code>bootstrap</code> prepares the local platform, starts the API with its database, and writes a profile. That profile identity owns every environment you create. The API also serves the dashboard.</p>
           <pre class="code-block"><span class="prompt">$ </span>signet bootstrap</pre>
           <p>Pass the advertised host when other machines must reach the endpoints:</p>
           <pre class="code-block"><span class="prompt">$ </span>signet bootstrap --host 192.168.100.2</pre>
@@ -80,7 +80,7 @@
 
           <h3>Step 2. Check the stack</h3>
           <pre class="code-block"><span class="prompt">$ </span>signet status</pre>
-          <p>The report covers the cluster, API health, and the identity that will own your environments.</p>
+          <p>The report covers the local platform, API health, and the identity that will own your environments.</p>
 
           <h3>Step 3. Provision an environment</h3>
           <pre class="code-block"><span class="prompt">$ </span>signet up --name my-app --ttl 2h --ui</pre>
@@ -95,7 +95,7 @@
           <ul>
             <li>Your own wallet, connected to <code>indexer_endpoint</code> or to the node RPC.</li>
             <li>The environment's node, which answers <code>getnewaddress</code> over <code>rpc_url</code>, authenticated with <code>rpc_auth</code>.</li>
-            <li>A Lightning instance, with <code>lncli newaddress p2wkh</code> inside the pod, or <code>GET /v1/newaddress</code> with the bundle macaroon.</li>
+            <li>A Lightning instance, with <code>lncli newaddress p2wkh</code> in the environment, or <code>GET /v1/newaddress</code> with the bundle macaroon.</li>
           </ul>
           <pre class="code-block"><span class="prompt">$ </span>curl -s --user "$RPC_AUTH" -H 'content-type: text/plain;' \
     --data-binary '{"jsonrpc":"1.0","id":1,"method":"getnewaddress","params":[]}' \
@@ -105,7 +105,7 @@
 
           <h3>Tear down</h3>
           <pre class="code-block"><span class="prompt">$ </span>signet teardown</pre>
-          <p>Teardown deletes the cluster and every environment in it. The profile is kept, so the identity keeps ownership of what you create next.</p>
+          <p>Teardown deletes the local platform and every environment on it. The profile is kept, so the identity keeps ownership of what you create next.</p>
         </section>
 
         <section id="configure">
@@ -137,7 +137,7 @@
             </tbody>
           </table>
           <p>The chain and its block signer always come up. Everything else is optional, and a disabled component is omitted from the bundle rather than returned as null.</p>
-          <p>Only <code>lnd</code> is available as a Lightning implementation. Instance names become Kubernetes resource names, so use lowercase letters, digits, and hyphens, and stay within 63 characters.</p>
+          <p>Only <code>lnd</code> is available as a Lightning implementation. Instance names are DNS labels: lowercase letters, digits, and hyphens, up to 63 characters.</p>
           <p>Print the full schema when you need field-level detail:</p>
           <pre class="code-block"><span class="prompt">$ </span>signet schema</pre>
         </section>
@@ -170,7 +170,7 @@
           <h3>Electrum wallet</h3>
           <p>Connect to <code>indexer_endpoint</code>. It is a plain endpoint with no authentication, reachable from the machine that runs the stack.</p>
           <h3>Explorer</h3>
-          <p>Open <code>explorer_url</code> in a browser. The hostname routes through the local gateway, so an explorer hostname needs a hosts entry when you open it from another machine.</p>
+          <p>Open <code>explorer_url</code> in a browser. The platform routes by hostname, so an explorer hostname needs a hosts entry when you open it from another machine.</p>
           <h3>Faucet</h3>
           <p>Fund any address that belongs to that chain. Use the CLI, or post to <code>faucet_url</code> with the environment credentials.</p>
           <h3>Remote callers</h3>
@@ -186,9 +186,9 @@ p2p    localhost:21002</pre>
           <p>Each entry in the map carries <code>rest_url</code>, <code>grpc_url</code>, <code>tls_cert</code>, the <code>auth</code> object with a macaroon, <code>node_id</code>, and <code>node_uri</code>.</p>
           <h3>Authentication and TLS</h3>
           <p>The macaroon ships hex-encoded. REST clients send it as the <code>Grpc-Metadata-macaroon</code> header. gRPC clients send the macaroon and trust the certificate.</p>
-          <p>The bundle's <code>tls_cert</code> is the CA, hex-encoded PEM. Decode it and pin it as a root. The served leaf chains to it and covers localhost, the in-cluster names, and the advertised host. Do not disable verification, because the environment exists to behave like the real thing.</p>
+          <p>The bundle's <code>tls_cert</code> is the CA, hex-encoded PEM. Decode it and pin it as a root. The served leaf chains to it and covers localhost, the internal service names, and the advertised host. Do not disable verification, because the environment exists to behave like the real thing.</p>
           <h3>Peering and channels</h3>
-          <p>Instances peer automatically after create. Channels stay manual, because channel liquidity is usually the thing under test. Open, pay, and close with <code>lncli</code> inside the pod, or from a client that uses <code>node_uri</code>.</p>
+          <p>Instances peer automatically after create. Channels stay manual, because channel liquidity is usually the thing under test. Open, pay, and close with <code>lncli</code> run in the environment, or from a client that uses <code>node_uri</code>.</p>
           <p>Nodes start with an empty wallet. Fund an address first, then open a channel.</p>
         </section>
 
@@ -204,14 +204,14 @@ p2p    localhost:21002</pre>
               <tr><th scope="row">signet fund</th><td>Send coin from the faucet to an address</td></tr>
               <tr><th scope="row">signet stop</th><td>Scale compute to zero and keep storage. The chain survives</td></tr>
               <tr><th scope="row">signet start</th><td>Resume a stopped environment</td></tr>
-              <tr><th scope="row">signet down</th><td>Delete the namespace and the chain</td></tr>
+              <tr><th scope="row">signet down</th><td>Delete the environment and its chain</td></tr>
               <tr><th scope="row">signet delete</th><td>Remove the record of a destroyed or expired environment</td></tr>
               <tr><th scope="row">signet status</th><td>Report the local stack, API health, and identity</td></tr>
               <tr><th scope="row">signet teardown</th><td>Delete the local stack. The profile is kept</td></tr>
             </tbody>
           </table>
           <h3>Expiry</h3>
-          <p>An environment created with a TTL carries an expiry time. A background reaper deletes the namespace after that time passes. Stopping an environment does not pause the clock, so a stopped environment still expires.</p>
+          <p>An environment created with a TTL carries an expiry time. A background reaper deletes the environment after that time passes. Stopping an environment does not pause the clock, so a stopped environment still expires.</p>
           <p>Names are scoped to your identity. A name held by a destroyed or expired record is free to use again.</p>
         </section>
 
@@ -248,7 +248,7 @@ p2p    localhost:21002</pre>
         "ttl_secs": 1200
       }
     }'</pre>
-          <p>The response echoes the resolved images and the expiry time. The same calls drive the CLI, so a pipeline can create an environment, read the bundle, run its tests, and call <code>environment.destroy</code>.</p>
+          <p>The response echoes the resolved versions and the expiry time. The same calls drive the CLI, so a pipeline can create an environment, read the bundle, run its tests, and call <code>environment.destroy</code>.</p>
         </section>
 
         <section id="troubleshooting">
@@ -262,7 +262,7 @@ p2p    localhost:21002</pre>
           <h3>A signed request fails after a host change</h3>
           <p>The signed URL must match the URL the server receives. Mint a new header for the new URL.</p>
           <h3>The explorer does not open from another machine</h3>
-          <p>The gateway routes by hostname, so add a hosts entry for the environment's explorer hostname on the machine that opens it.</p>
+          <p>The platform routes by hostname, so add a hosts entry for the environment's explorer hostname on the machine that opens it.</p>
           <h3>A Lightning name is rejected</h3>
           <p>Use lowercase letters, digits, and hyphens, start with a letter or digit, and keep the name within 63 characters. Names must be unique inside one environment.</p>
           <h3>A channel will not open</h3>

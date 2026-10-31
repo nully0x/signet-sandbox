@@ -58,7 +58,7 @@
               <div><dt>lightning</dt><dd>3 x lnd</dd></div>
               <div><dt>ttl</dt><dd>2h, auto teardown</dd></div>
             </dl>
-            <p class="specimen-foot mono">ONE NAMESPACE · ONE CHAIN</p>
+            <p class="specimen-foot mono">ONE CHAIN PER ENVIRONMENT</p>
           </aside>
         </div>
       </section>
@@ -75,7 +75,7 @@
           <p class="panel-note"><span class="tag">COMING SOON</span> Neither package is published yet. Both commands activate at the first CLI release.</p>
           <ul class="requirements">
             <li><span class="req-dot" aria-hidden="true"></span> Docker daemon, running: Docker Desktop, colima, or OrbStack</li>
-            <li><span class="req-dot" aria-hidden="true"></span> Nothing else. Kubernetes stays internal, and you never run kubectl</li>
+            <li><span class="req-dot" aria-hidden="true"></span> Nothing else. You never manage servers or the platform underneath</li>
           </ul>
           <a class="panel-link" href="docs.html">Read the docs</a>
         </div>
@@ -90,7 +90,7 @@
               <span class="step-number">01</span>
               <div>
                 <strong>Bootstrap the local stack</strong>
-                <p>Creates the cluster, imports the images, starts the API, and writes a local identity. Pass the host at this step when other machines must reach the endpoints.</p>
+                <p>Prepares the local platform, starts the API, and writes a local identity. Pass the host at this step when other machines must reach the endpoints.</p>
                 <pre class="code-block compact"><span class="prompt">$ </span>signet bootstrap
 <span class="prompt">$ </span>signet bootstrap --host 192.168.100.2</pre>
               </div>
@@ -115,7 +115,7 @@
               <span class="step-number">04</span>
               <div>
                 <strong>Fund and tear down</strong>
-                <p>Fund an address from your wallet, or one the node returns with getnewaddress. Remove the namespace and the chain when the work is done.</p>
+                <p>Fund an address from your wallet, or one the node returns with getnewaddress. Remove the environment and its chain when the work is done.</p>
                 <pre class="code-block compact"><span class="prompt">$ </span>signet fund my-app tb1qexampleaddress --amount 100000
 <span class="prompt">$ </span>signet down my-app</pre>
               </div>
@@ -248,8 +248,8 @@
         <div class="container how-inner">
           <div>
             <p class="eyebrow">04 / ISOLATED BY DEFAULT</p>
-            <h2 id="how-title">One namespace.<br>One challenge.</h2>
-            <p>Every environment gets its own Kubernetes namespace and its own signet challenge. Two environments cannot join the same chain, and there is no shared tier to compromise. A per-environment key signs every block. Destroying the environment deletes the namespace and everything inside it.</p>
+            <h2 id="how-title">One chain.<br>One challenge.</h2>
+            <p>Every environment gets its own chain and its own signet challenge. Two environments cannot join the same chain, and there is no shared tier to compromise. A per-environment key signs every block. Destroying the environment removes it and everything inside it.</p>
             <p>Local mode and hosted mode differ in connection details only, never in what the caller must know. The same configuration file that created a persistent environment works in CI with a TTL appended.</p>
           </div>
           <ol class="flow" aria-label="Provisioning flow">
@@ -272,9 +272,9 @@
             <li>
               <span class="flow-icon" aria-hidden="true">03</span>
               <div>
-                <span class="mono">ORCHESTRATOR</span>
-                <strong>Namespace per environment</strong>
-                <p>kube-rs applies the manifests. The signer, node, and services land in the namespace together.</p>
+                <span class="mono">PROVISIONING</span>
+                <strong>One environment per call</strong>
+                <p>The platform applies the environment definition. The signer, node, and services start together.</p>
               </div>
             </li>
             <li>
@@ -313,7 +313,7 @@
             <tr>
               <th scope="row">Provisioning</th>
               <td><span class="tag tag-always">SHIPPED</span></td>
-              <td>JSON-RPC API, namespaces, connection bundle, stop and start, TTL reaper</td>
+              <td>JSON-RPC API, isolated environments, connection bundle, stop and start, TTL reaper</td>
             </tr>
             <tr>
               <th scope="row">Components</th>
