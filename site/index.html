@@ -6,8 +6,8 @@
     <meta name="theme-color" content="#0c1013">
     <meta name="description" content="Isolated Bitcoin signet environments, provisioned in one call. A custom block signer, real proof of work, and a connection bundle with every endpoint your app needs.">
     <title>Signet Sandbox | A private signet per team</title>
-    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/styles.css">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="styles.css">
     <meta property="og:title" content="Signet Sandbox">
     <meta property="og:description" content="A private signet per team. One call provisions an isolated chain and returns every endpoint.">
     <meta property="og:type" content="website">
@@ -15,11 +15,10 @@
   <body>
     <header class="site-header">
       <div class="container header-inner">
-        <a class="brand" href="/" aria-label="Signet Sandbox home">
+        <a class="brand" href="./" aria-label="Signet Sandbox home">
           <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <rect x="1" y="2" width="22" height="6" rx="1"></rect>
-            <rect x="1" y="9.5" width="15" height="6" rx="1"></rect>
-            <rect x="1" y="17" width="19" height="6" rx="1"></rect>
+            <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-dasharray="2.5 2.1"></circle>
+            <rect x="8.5" y="8.5" width="7" height="7" rx="1" fill="currentColor"></rect>
           </svg>
           signet sandbox
         </a>
@@ -27,22 +26,41 @@
           <a class="nav-section" href="#bundle">Bundle</a>
           <a class="nav-section" href="#components">Components</a>
           <a class="nav-section" href="#how">How it works</a>
-          <a href="/docs.html">Docs</a>
+          <a href="docs.html">Docs</a>
           <a class="nav-source" href="https://github.com/nully0x/signet-sandbox">GitHub <span aria-hidden="true">↗</span></a>
         </nav>
       </div>
     </header>
 
     <main>
-      <section class="hero container" aria-labelledby="hero-title">
-        <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> OPEN SOURCE · MIT</p>
-        <h1 id="hero-title">Your own signet.<br><span>One call.</span></h1>
-        <p class="hero-description">Signet Sandbox provisions an isolated Bitcoin chain per team. Bitcoind in signet mode, a custom BIP325 block signer, and the services your application needs. Every call returns a connection bundle. A TTL deletes the environment when time is up.</p>
-        <div class="hero-actions">
-          <a class="button button-primary" href="#quickstart">Start local <span aria-hidden="true">↓</span></a>
-          <a class="text-link" href="https://github.com/nully0x/signet-sandbox">View source <span aria-hidden="true">↗</span></a>
+            <section class="hero">
+        <div class="container hero-grid">
+          <div class="hero-copy">
+            <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> OPEN SOURCE · MIT</p>
+            <h1 id="hero-title">Your own signet.<br><span>One call.</span></h1>
+            <p class="hero-description">Signet Sandbox provisions an isolated Bitcoin chain per team. Bitcoind in signet mode, a custom BIP325 block signer, and the services your application needs. Every call returns a connection bundle. A TTL deletes the environment when time is up.</p>
+            <div class="hero-actions">
+              <a class="button button-primary" href="#quickstart">Start local <span aria-hidden="true">↓</span></a>
+              <a class="text-link" href="https://github.com/nully0x/signet-sandbox">View source <span aria-hidden="true">↗</span></a>
+            </div>
+            <p class="hero-note">No sign-up · MIT licensed · Local or self-hosted</p>
+          </div>
+          <aside class="specimen" aria-label="Example environment">
+            <div class="specimen-head">
+              <span class="mono">ENVIRONMENT / 017</span>
+              <span class="mono">READY</span>
+            </div>
+            <dl>
+              <div><dt>chain</dt><dd>signet, custom challenge</dd></div>
+              <div><dt>signer</dt><dd>BIP325, block every 30s</dd></div>
+              <div><dt>indexer</dt><dd>electrs, tcp 50001</dd></div>
+              <div><dt>faucet</dt><dd>enabled</dd></div>
+              <div><dt>lightning</dt><dd>3 x lnd</dd></div>
+              <div><dt>ttl</dt><dd>2h, auto teardown</dd></div>
+            </dl>
+            <p class="specimen-foot mono">ONE NAMESPACE · ONE CHAIN</p>
+          </aside>
         </div>
-        <p class="hero-note">No sign-up · MIT licensed · Local or self-hosted</p>
       </section>
 
       <section class="setup container" id="quickstart" aria-label="Install and first environment">
@@ -59,7 +77,7 @@
             <li><span class="req-dot" aria-hidden="true"></span> Docker daemon, running: Docker Desktop, colima, or OrbStack</li>
             <li><span class="req-dot" aria-hidden="true"></span> Nothing else. Kubernetes stays internal, and you never run kubectl</li>
           </ul>
-          <a class="panel-link" href="/docs.html">Read the docs</a>
+          <a class="panel-link" href="docs.html">Read the docs</a>
         </div>
 
         <div class="panel">
@@ -97,7 +115,7 @@
               <span class="step-number">04</span>
               <div>
                 <strong>Fund and tear down</strong>
-                <p>Fund any address from the faucet. Remove the namespace and the chain when the work is done.</p>
+                <p>Fund an address from your wallet, or one the node returns with getnewaddress. Remove the namespace and the chain when the work is done.</p>
                 <pre class="code-block compact"><span class="prompt">$ </span>signet fund my-app tb1qexampleaddress --amount 100000
 <span class="prompt">$ </span>signet down my-app</pre>
               </div>
@@ -109,7 +127,7 @@
       <section class="bundle-section" id="bundle" aria-labelledby="bundle-title">
         <div class="container">
           <div class="section-heading">
-            <p class="eyebrow">THE BUNDLE</p>
+            <p class="eyebrow">01 / THE BUNDLE</p>
             <h2 id="bundle-title">Configuration in. Credentials out.</h2>
             <p>Names resolve on the server, so scripts never track UUIDs. Disabled components are omitted from the object, not returned as null. Lightning entries are keyed by the instance name you chose.</p>
           </div>
@@ -148,7 +166,7 @@
 
       <section class="components container" id="components" aria-labelledby="components-title">
         <div class="section-heading">
-          <p class="eyebrow">WHAT AN ENVIRONMENT CONTAINS</p>
+          <p class="eyebrow">02 / WHAT AN ENVIRONMENT CONTAINS</p>
           <h2 id="components-title">Pick the parts you need.</h2>
           <p>The chain backend always comes up. Everything else is a choice you make at create time, and the choice is recorded in the bundle.</p>
         </div>
@@ -199,7 +217,7 @@
 
       <section class="options container" id="why" aria-labelledby="why-title">
         <div class="section-heading">
-          <p class="eyebrow">WHY THIS EXISTS</p>
+          <p class="eyebrow">03 / WHY THIS EXISTS</p>
           <h2 id="why-title">Three bad options. One that fits.</h2>
         </div>
         <div class="option-grid">
@@ -229,40 +247,40 @@
       <section class="how" id="how" aria-labelledby="how-title">
         <div class="container how-inner">
           <div>
-            <p class="eyebrow">ISOLATED BY DEFAULT</p>
+            <p class="eyebrow">04 / ISOLATED BY DEFAULT</p>
             <h2 id="how-title">One namespace.<br>One challenge.</h2>
             <p>Every environment gets its own Kubernetes namespace and its own signet challenge. Two environments cannot join the same chain, and there is no shared tier to compromise. A per-environment key signs every block. Destroying the environment deletes the namespace and everything inside it.</p>
             <p>Local mode and hosted mode differ in connection details only, never in what the caller must know. The same configuration file that created a persistent environment works in CI with a TTL appended.</p>
           </div>
           <ol class="flow" aria-label="Provisioning flow">
             <li>
-              <span class="flow-icon" aria-hidden="true">{ }</span>
+              <span class="flow-icon" aria-hidden="true">01</span>
               <div>
-                <span class="mono">01 / CONFIGURATION</span>
+                <span class="mono">CONFIGURATION</span>
                 <strong>One schema, three surfaces</strong>
                 <p>CLI flags, a JSON file, or a direct RPC call produce the same validated object.</p>
               </div>
             </li>
             <li>
-              <span class="flow-icon" aria-hidden="true">→</span>
+              <span class="flow-icon" aria-hidden="true">02</span>
               <div>
-                <span class="mono">02 / PROVISIONING API</span>
+                <span class="mono">PROVISIONING API</span>
                 <strong>JSON-RPC over one route</strong>
                 <p>NIP-98 signed events or an API token authenticate the caller. Failures are error objects, not HTTP status codes.</p>
               </div>
             </li>
             <li>
-              <span class="flow-icon" aria-hidden="true">▦</span>
+              <span class="flow-icon" aria-hidden="true">03</span>
               <div>
-                <span class="mono">03 / ORCHESTRATOR</span>
+                <span class="mono">ORCHESTRATOR</span>
                 <strong>Namespace per environment</strong>
                 <p>kube-rs applies the manifests. The signer, node, and services land in the namespace together.</p>
               </div>
             </li>
             <li>
-              <span class="flow-icon" aria-hidden="true">↗</span>
+              <span class="flow-icon" aria-hidden="true">04</span>
               <div>
-                <span class="mono">04 / YOUR APPLICATION</span>
+                <span class="mono">YOUR APPLICATION</span>
                 <strong>Connect and test</strong>
                 <p>The bundle carries endpoints, a macaroon, and the TLS certificate to pin. The reaper removes the rest.</p>
               </div>
@@ -273,7 +291,7 @@
 
       <section class="status container" id="status" aria-labelledby="status-title">
         <div class="section-heading">
-          <p class="eyebrow">STATUS</p>
+          <p class="eyebrow">05 / STATUS</p>
           <h2 id="status-title">What works today.</h2>
           <p>Stated plainly, because infrastructure claims are easy to make and hard to check.</p>
         </div>
@@ -323,11 +341,11 @@
     </main>
 
     <footer class="site-footer container">
-      <a class="brand" href="/">signet sandbox</a>
+      <a class="brand" href="./">signet sandbox</a>
       <span>Open source under MIT.</span>
       <div>
         <a href="https://github.com/nully0x/signet-sandbox">GitHub <span aria-hidden="true">↗</span></a>
-        <a href="/docs.html">Docs</a>
+        <a href="docs.html">Docs</a>
       </div>
     </footer>
   </body>

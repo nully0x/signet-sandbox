@@ -6,25 +6,24 @@
     <meta name="theme-color" content="#0c1013">
     <meta name="description" content="How to use Signet Sandbox: provision an environment, read the connection bundle, connect an application, and manage the lifecycle.">
     <title>Docs | Signet Sandbox</title>
-    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/styles.css">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="styles.css">
   </head>
   <body>
     <header class="site-header">
       <div class="container header-inner">
-        <a class="brand" href="/" aria-label="Signet Sandbox home">
+        <a class="brand" href="./" aria-label="Signet Sandbox home">
           <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <rect x="1" y="2" width="22" height="6" rx="1"></rect>
-            <rect x="1" y="9.5" width="15" height="6" rx="1"></rect>
-            <rect x="1" y="17" width="19" height="6" rx="1"></rect>
+            <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-dasharray="2.5 2.1"></circle>
+            <rect x="8.5" y="8.5" width="7" height="7" rx="1" fill="currentColor"></rect>
           </svg>
           signet sandbox
         </a>
         <nav aria-label="Main navigation">
-          <a class="nav-section" href="/#bundle">Bundle</a>
-          <a class="nav-section" href="/#components">Components</a>
-          <a class="nav-section" href="/#how">How it works</a>
-          <a href="/docs.html" aria-current="page">Docs</a>
+          <a class="nav-section" href="./#bundle">Bundle</a>
+          <a class="nav-section" href="./#components">Components</a>
+          <a class="nav-section" href="./#how">How it works</a>
+          <a href="docs.html" aria-current="page">Docs</a>
           <a class="nav-source" href="https://github.com/nully0x/signet-sandbox">GitHub <span aria-hidden="true">↗</span></a>
         </nav>
       </div>
@@ -92,6 +91,16 @@
           <p>Provisioning prints the connection bundle. Read it again at any time, then send coin to an address:</p>
           <pre class="code-block"><span class="prompt">$ </span>signet get my-app --json
 <span class="prompt">$ </span>signet fund my-app tb1qexampleaddress --amount 100000</pre>
+          <p>The bundle carries no address. Generate one from something that tracks this chain:</p>
+          <ul>
+            <li>Your own wallet, connected to <code>indexer_endpoint</code> or to the node RPC.</li>
+            <li>The environment's node, which answers <code>getnewaddress</code> over <code>rpc_url</code>, authenticated with <code>rpc_auth</code>.</li>
+            <li>A Lightning instance, with <code>lncli newaddress p2wkh</code> inside the pod, or <code>GET /v1/newaddress</code> with the bundle macaroon.</li>
+          </ul>
+          <pre class="code-block"><span class="prompt">$ </span>curl -s --user "$RPC_AUTH" -H 'content-type: text/plain;' \
+    --data-binary '{"jsonrpc":"1.0","id":1,"method":"getnewaddress","params":[]}' \
+    "$RPC_URL"</pre>
+          <p>Use an address from a wallet that tracks this chain. A key from another chain gives you coin you cannot see.</p>
           <p>Every command that takes an environment accepts the id or the name. Names resolve on the server.</p>
 
           <h3>Tear down</h3>
@@ -265,11 +274,11 @@ p2p    localhost:21002</pre>
     </main>
 
     <footer class="site-footer container">
-      <a class="brand" href="/">signet sandbox</a>
+      <a class="brand" href="./">signet sandbox</a>
       <span>Open source under MIT.</span>
       <div>
-        <a href="/">Home <span aria-hidden="true">↗</span></a>
-        <a href="/docs.html">Docs</a>
+        <a href="./">Home <span aria-hidden="true">↗</span></a>
+        <a href="docs.html">Docs</a>
         <a href="https://github.com/nully0x/signet-sandbox">Source <span aria-hidden="true">↗</span></a>
       </div>
     </footer>
