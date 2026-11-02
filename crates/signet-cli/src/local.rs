@@ -198,7 +198,7 @@ fn kubectl_download_url() -> String {
 
 fn os_name() -> &'static str {
     if cfg!(target_os = "macos") {
-        "macos"
+        "darwin"
     } else {
         "linux"
     }
@@ -668,17 +668,17 @@ mod tests {
 
     #[test]
     fn download_urls_match_platform() {
+        let os = os_name();
         let url = k3d_download_url();
         assert!(url.starts_with("https://github.com/k3d-io/k3d/releases/latest/download/k3d-"));
         assert!(
-            url.ends_with("-linux-amd64") || url.ends_with("-linux-arm64") || url.contains("macos")
+            url.ends_with(&format!("-{os}-amd64")) || url.ends_with(&format!("-{os}-arm64"))
         );
         let kubectl = kubectl_download_url();
         assert!(kubectl.contains("{version}"));
         assert!(
-            kubectl.contains("/bin/linux/amd64/")
-                || kubectl.contains("/bin/linux/arm64/")
-                || kubectl.contains("darwin")
+            kubectl.contains(&format!("/bin/{os}/amd64/"))
+                || kubectl.contains(&format!("/bin/{os}/arm64/"))
         );
     }
 
