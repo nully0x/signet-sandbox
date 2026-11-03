@@ -38,27 +38,31 @@ pub const EXPIRES_AT_ANNOTATION: &str = "signet.sandbox/expires-at";
 
 const GATEWAY_NAME: &str = "signet-eg";
 const GATEWAY_NAMESPACE: &str = "signet-platform";
-// Per-env electrs TCP ports. The pool sits BELOW the ephemeral port
-// range (32768-60999): inside it, any host service can permanently
-// occupy a port and break every cluster port mapping. Keep the window
-// in sync with the k3d port maps (justfile cluster-up, signet-cli
-// local.rs) — the k3d load balancer fails on multi-thousand-port maps.
+// One published host-port window (20000-20399) shared by every
+// per-env service; the k3d port maps in justfile cluster-up and
+// signet-cli local.rs must cover it exactly. The k3d serverlb (one
+// nginx) fails to start past roughly a thousand published ports, so
+// capacity changes re-partition this window instead of appending
+// ranges. It sits BELOW the ephemeral port range (32768-60999): inside
+// it, any host service can permanently occupy a port and break every
+// cluster port mapping.
+//
+// Partitions: electrs 20000-20099, explorer 20100-20199, lightning
+// 20200-20399.
 pub const ELECTRUM_PORT_BASE: i32 = 20000;
-pub const ELECTRUM_PORT_MAX: i32 = 20599;
+pub const ELECTRUM_PORT_MAX: i32 = 20099;
 
 // Per-env explorer HTTP ports for env hosts that cannot carry
-// subdomains (an IP or localhost): the explorer is then exposed on its
-// own port instead of an env-<id> hostname through the gateway. Same
-// k3d port-map sync rule as the electrs window.
-pub const EXPLORER_PORT_BASE: i32 = 20600;
-pub const EXPLORER_PORT_MAX: i32 = 20999;
+// subdomains (an IP or localhost): the explorer is exposed on its own
+// port instead of an env-<id> hostname through the gateway. DNS env
+// hosts skip this pool entirely; the gateway serves them on 80/443.
+pub const EXPLORER_PORT_BASE: i32 = 20100;
+pub const EXPLORER_PORT_MAX: i32 = 20199;
 
 // Per-instance lightning TCP ports: REST on the port, gRPC on port + 1,
-// p2p on port + 2 (one port triple per LND instance, allocated from the
-// same window, above the electrs range). Mapped by k3d at cluster create
-// like the electrs window.
-pub const LIGHTNING_PORT_BASE: i32 = 21000;
-pub const LIGHTNING_PORT_MAX: i32 = 21199;
+// p2p on port + 2 (one port triple per LND instance).
+pub const LIGHTNING_PORT_BASE: i32 = 20200;
+pub const LIGHTNING_PORT_MAX: i32 = 20399;
 
 const DEFAULT_SIGNER_IMAGE: &str = "signet-signer:dev";
 
@@ -1805,9 +1809,9 @@ mod tests {
                 "192.168.100.2",
                 true,
                 "9f2a1b",
-                Some(20600),
+                Some(20100),
             ),
-            Some("http://192.168.100.2:20600".to_string())
+            Some("http://192.168.100.2:20100".to_string())
         );
         assert_eq!(
             compose_explorer_url(true, "http", "localhost", "localhost", true, "9f2a1b", None),

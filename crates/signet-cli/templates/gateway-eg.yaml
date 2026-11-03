@@ -1,6 +1,7 @@
 # Edge bootstrap for the signet dev cluster: Envoy Gateway controller +
-# GatewayClass + the shared platform Gateway. Per-env electrum listeners are
-# appended to this Gateway by the orchestrator (port-per-env, 20000-20599).
+# GatewayClass + the shared platform Gateway. It serves env HTTP (explorer)
+# routes for DNS env hosts; IP/localhost env hosts bypass it entirely and
+# use per-env LoadBalancer ports (see the port pools in signet-orchestrator).
 apiVersion: v1
 kind: Namespace
 metadata:

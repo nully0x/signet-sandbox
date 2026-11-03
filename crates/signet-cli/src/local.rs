@@ -293,11 +293,7 @@ fn ensure_cluster(bin: &Path) -> anyhow::Result<()> {
             .arg("--port")
             .arg("8081:8081@loadbalancer")
             .arg("--port")
-            .arg("20000-20599:20000-20599@loadbalancer")
-            .arg("--port")
-            .arg("20600-20999:20600-20999@loadbalancer")
-            .arg("--port")
-            .arg("21000-21199:21000-21199@loadbalancer")
+            .arg("20000-20399:20000-20399@loadbalancer")
             .arg("--k3s-arg")
             .arg("--disable=traefik@server:0")
             .arg("--volume")
@@ -596,8 +592,8 @@ pub(crate) fn api_healthy(url: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// The k3d serverlb maps host 8081 to the api's LoadBalancer service; poll
-/// until the routing chain answers.
+/// The k3d serverlb maps host 8081 through to the api's LoadBalancer
+/// service; poll until the routing chain answers.
 fn wait_api() -> anyhow::Result<()> {
     println!("waiting for the api on {DEFAULT_LOCAL_API}…");
     for _ in 0..30 {

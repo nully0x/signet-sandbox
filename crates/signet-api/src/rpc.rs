@@ -1683,7 +1683,7 @@ mod tests {
             component_faucet: false,
             rpc_endpoint: "http://x/rpc".into(),
             electrum_port: Some(20000),
-            explorer_port: Some(20600),
+            explorer_port: Some(20100),
             faucet_endpoint: None,
             ln_endpoint: None,
             ttl_secs: None,
@@ -1697,11 +1697,11 @@ mod tests {
             EnvStatus::Ready,
             None,
             BTreeMap::new(),
-            Some("http://192.168.100.2:20600".to_string()),
+            Some("http://192.168.100.2:20100".to_string()),
             Some("tcp://192.168.100.2:20000".to_string()),
         ))
         .unwrap();
-        assert_eq!(json["explorer_url"], "http://192.168.100.2:20600");
+        assert_eq!(json["explorer_url"], "http://192.168.100.2:20100");
         assert_eq!(json["indexer_endpoint"], "tcp://192.168.100.2:20000");
     }
 }
