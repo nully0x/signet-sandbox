@@ -41,6 +41,7 @@
           <li><a href="#lightning">Lightning</a></li>
           <li><a href="#manage">Manage and tear down</a></li>
           <li><a href="#api">Call the API</a></li>
+          <li><a href="#agents">Agent skill</a></li>
           <li><a href="#troubleshooting">Troubleshooting</a></li>
         </ul>
       </aside>
@@ -249,6 +250,11 @@ p2p    localhost:21002</pre>
       }
     }'</pre>
           <p>The response echoes the resolved versions and the expiry time. The same calls drive the CLI, so a pipeline can create an environment, read the bundle, run its tests, and call <code>environment.destroy</code>.</p>
+        </section>
+
+        <section id="agents">
+          <h2>Agent skill</h2>
+          <p>Coding agents can drive the sandbox for you. The repository ships a skill at <code>skills/signet-sandbox/SKILL.md</code>: the same workflow this page documents, compressed for agents — bundle shape, endpoints, funding, lifecycle, multi-node channels, and the LND REST quirks. Reference the file from your agent, or copy it into your agent's skills directory.</p>
         </section>
 
         <section id="troubleshooting">
