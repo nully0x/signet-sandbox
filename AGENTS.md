@@ -192,3 +192,11 @@ Lock files, generated files, and vendored code get their own commits.
     Gateway's namespace. EG ships its own gateway-api CRDs (supersede the
     manual standard install). Multi-node production requires MetalLB —
     klipper has no VIP or failover.
+17. **k3d serverlb (one nginx) fails past ~1k published ports** — restart
+    loop, no `start worker processes` log line (~1.2k maps failed; ~800
+    ran for months). Local therefore publishes ONE window, 20000-20399,
+    partitioned electrs 20000-20099, explorer 20100-20199, lightning
+    20200-20399 (`justfile cluster-up` and `signet-cli` local.rs must
+    cover it exactly). Add capacity by re-partitioning that window, never
+    by appending a range. Hosted (DNS env host) publishes nothing per
+    env — the gateway carries it on 80/443.

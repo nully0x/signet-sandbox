@@ -209,12 +209,12 @@ and `signet up` bootstraps the whole local stack first when the api on
 1. **Single machine (default).** `signet bootstrap` uses `localhost`.
    Every endpoint URL reads `localhost`: the API on `localhost:8081`,
    electrum on `tcp://localhost:200xx`, the explorer on
-   `http://localhost:206xx`. Nothing resolves outside this machine.
+   `http://localhost:201xx`. Nothing resolves outside this machine.
 2. **Remote machine.** `signet bootstrap --host <ip>` advertises the
    machine's IP. Anyone who can reach `<ip>` uses the same URLs with the
    IP in place of `localhost`, with no DNS or hosts-file setup: the API
    on `http://<ip>:8081`, electrum on `tcp://<ip>:200xx`, the explorer
-   on `http://<ip>:206xx`. LND leaf certs cover the IP, so lightning
+   on `http://<ip>:201xx`. LND leaf certs cover the IP, so lightning
    TLS connects from other machines too.
 
 A DNS name (`--host sandbox.example.com`) selects the hosted-style
@@ -235,15 +235,15 @@ cargo run -p signet-orchestrator --example provision -- destroy <env-id>
 
 Every LND instance is reachable by port, not by name: the instance's
 LoadBalancer service exposes REST, gRPC, and p2p on three ports from the
-lightning range (21000-21199 — REST on the port, gRPC on port + 1, p2p
-on port + 2), mapped onto the host by k3d like the electrs range. The
-bundle carries the concrete URLs plus the node identity:
+lightning range (20200-20399 — REST on the port, gRPC on port + 1, p2p
+on port + 2), mapped onto the host by k3d like the rest of the shared
+window. The bundle carries the concrete URLs plus the node identity:
 
 ```text
-rest      https://localhost:21000      (on the cluster machine)
-grpc      https://localhost:21001
-p2p       localhost:21002              (peering — node_uri uses this)
-rest      https://192.168.100.2:21000  (from any machine — the leaf cert
+rest      https://localhost:20200      (on the cluster machine)
+grpc      https://localhost:20201
+p2p       localhost:20202              (peering — node_uri uses this)
+rest      https://192.168.100.2:20200  (from any machine — the leaf cert
                                        covers the deployment host from
                                        SIGNET_ENV_HOST)
 ```
@@ -261,9 +261,10 @@ leaf certs cover it, so TLS works too.
 The explorer and electrum endpoints always follow that host, composed
 live at read time — never a stored `localhost` URL:
 
-- electrum: `tcp://<env-host>:<port>` (20000-20599 pool)
+- electrum: `tcp://<env-host>:<port>` (20000-20099 pool)
 - explorer on an IP or localhost host: `http://<env-host>:<port>`
-  (20600-20999 pool) — resolvable everywhere, no /etc/hosts needed
+  (20100-20199, its slice of the same published window) — resolvable
+  everywhere, no /etc/hosts needed
 - explorer on a DNS host: `http://env-<id>.<host>` routed through the
   gateway — one wildcard record `*.<host>` covers every environment
 
