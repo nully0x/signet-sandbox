@@ -566,6 +566,13 @@ impl Orchestrator {
         self.explorer_ports
     }
 
+    /// Electrum endpoint for one env, composed live from the env host so
+    /// remote clients reach the bootstrap host instead of a hardcoded
+    /// localhost.
+    pub fn indexer_endpoint(&self, electrum_port: Option<u16>) -> Option<String> {
+        electrum_port.map(|p| format!("tcp://{}:{}", self.ln_host, p))
+    }
+
     pub fn explorer_url(
         &self,
         requested: bool,

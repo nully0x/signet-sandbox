@@ -462,7 +462,6 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
     } else {
         None
     };
-    let indexer_endpoint = electrum_port.map(|p| format!("tcp://localhost:{p}"));
     let row = signet_db::NewEnvironment {
         id: env_id,
         name: &params.name,
@@ -474,7 +473,6 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
         component_faucet: params.components.faucet,
         rpc_endpoint: &rpc_endpoint,
         explorer_port,
-        indexer_endpoint: indexer_endpoint.as_deref(),
         electrum_port,
         ttl_secs: params.ttl_secs,
         expires_at,
@@ -595,6 +593,9 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
                 &short_id(env_id),
                 explorer_port.map(|p| p as u16),
             ),
+            state
+                .orchestrator
+                .indexer_endpoint(electrum_port.map(|p| p as u16)),
         ))
         .expect("bundle serializes"),
     )
@@ -656,10 +657,20 @@ async fn bundle_response(
         &short_id(row.id),
         row.explorer_port.map(|p| p as u16),
     );
+    let indexer_endpoint = state
+        .orchestrator
+        .indexer_endpoint(row.electrum_port.map(|p| p as u16));
     Response::result(
         Some(id),
-        serde_json::to_value(bundle_for(row, status, rpc_auth, lightning, explorer_url))
-            .expect("bundle serializes"),
+        serde_json::to_value(bundle_for(
+            row,
+            status,
+            rpc_auth,
+            lightning,
+            explorer_url,
+            indexer_endpoint,
+        ))
+        .expect("bundle serializes"),
     )
 }
 
@@ -1268,6 +1279,7 @@ fn bundle_for(
     rpc_auth: Option<String>,
     lightning: BTreeMap<String, LightningConnection>,
     explorer_url: Option<String>,
+    indexer_endpoint: Option<String>,
 ) -> ConnectionBundle {
     ConnectionBundle {
         environment_id: row.id.to_string(),
@@ -1275,7 +1287,7 @@ fn bundle_for(
         rpc_url: row.rpc_endpoint.clone(),
         rpc_auth,
         zmq_url: None,
-        indexer_endpoint: row.indexer_endpoint.clone(),
+        indexer_endpoint,
         explorer_url,
         faucet_url: row.faucet_endpoint.clone(),
         lightning,
@@ -1586,7 +1598,7 @@ mod tests {
             component_indexer: false,
             component_faucet: false,
             rpc_endpoint: "http://x/rpc".into(),
-            indexer_endpoint: None,
+            electrum_port: None,
             explorer_port: None,
             faucet_endpoint: None,
             ln_endpoint: None,
@@ -1601,6 +1613,7 @@ mod tests {
             EnvStatus::Provisioning,
             None,
             BTreeMap::new(),
+            None,
             None,
         ))
         .unwrap();
@@ -1629,7 +1642,7 @@ mod tests {
             component_indexer: false,
             component_faucet: false,
             rpc_endpoint: "http://x/rpc".into(),
-            indexer_endpoint: None,
+            electrum_port: None,
             explorer_port: None,
             faucet_endpoint: None,
             ln_endpoint: None,
@@ -1646,6 +1659,7 @@ mod tests {
             None,
             BTreeMap::new(),
             None,
+            None,
         ))
         .unwrap();
         assert_eq!(
@@ -1655,7 +1669,7 @@ mod tests {
     }
 
     #[test]
-    fn bundle_carries_the_composed_explorer_url() {
+    fn bundle_carries_the_composed_endpoints() {
         let row = EnvironmentRow {
             id: Uuid::now_v7(),
             name: "x".into(),
@@ -1668,7 +1682,7 @@ mod tests {
             component_indexer: true,
             component_faucet: false,
             rpc_endpoint: "http://x/rpc".into(),
-            indexer_endpoint: Some("tcp://localhost:20000".into()),
+            electrum_port: Some(20000),
             explorer_port: Some(20600),
             faucet_endpoint: None,
             ln_endpoint: None,
@@ -1684,8 +1698,10 @@ mod tests {
             None,
             BTreeMap::new(),
             Some("http://192.168.100.2:20600".to_string()),
+            Some("tcp://192.168.100.2:20000".to_string()),
         ))
         .unwrap();
         assert_eq!(json["explorer_url"], "http://192.168.100.2:20600");
+        assert_eq!(json["indexer_endpoint"], "tcp://192.168.100.2:20000");
     }
 }

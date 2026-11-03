@@ -204,6 +204,23 @@ With no
 and `signet up` bootstraps the whole local stack first when the api on
 `localhost:8081` is not running.
 
+### Two ways to bootstrap
+
+1. **Single machine (default).** `signet bootstrap` uses `localhost`.
+   Every endpoint URL reads `localhost`: the API on `localhost:8081`,
+   electrum on `tcp://localhost:200xx`, the explorer on
+   `http://localhost:206xx`. Nothing resolves outside this machine.
+2. **Remote machine.** `signet bootstrap --host <ip>` advertises the
+   machine's IP. Anyone who can reach `<ip>` uses the same URLs with the
+   IP in place of `localhost`, with no DNS or hosts-file setup: the API
+   on `http://<ip>:8081`, electrum on `tcp://<ip>:200xx`, the explorer
+   on `http://<ip>:206xx`. LND leaf certs cover the IP, so lightning
+   TLS connects from other machines too.
+
+A DNS name (`--host sandbox.example.com`) selects the hosted-style
+path: the explorer routes as `env-<id>.<host>` through Envoy Gateway
+and one wildcard record `*.<host>` covers every environment.
+
 Provision directly against the cluster without the API (useful for
 orchestrator gates):
 
@@ -237,13 +254,21 @@ public key, read with `lncli getinfo` in the pod) and `node_uri`
 
 One host drives everything: SIGNET_ENV_HOST (seeded by `signet
 bootstrap --host <ip-or-domain>`) is the lightning endpoint host, the
-cert SAN, and the explorer exposure mode. An IP gives remote lightning
-clients direct connectivity. The explorer URL follows the host form:
-DNS hosts route `env-<id>.<host>` through the gateway (one wildcard
-record `*.<host>` covers every environment); an IP or localhost host
-cannot carry subdomains, so the explorer gets a per-env port from the
-20600-20999 pool and the URL reads `http://<host>:<port>` — resolvable
-everywhere, no /etc/hosts needed.
+cert SAN, the electrum/explorer endpoint host, and the explorer
+exposure mode. An IP gives remote clients direct connectivity; LND
+leaf certs cover it, so TLS works too.
+
+The explorer and electrum endpoints always follow that host, composed
+live at read time — never a stored `localhost` URL:
+
+- electrum: `tcp://<env-host>:<port>` (20000-20599 pool)
+- explorer on an IP or localhost host: `http://<env-host>:<port>`
+  (20600-20999 pool) — resolvable everywhere, no /etc/hosts needed
+- explorer on a DNS host: `http://env-<id>.<host>` routed through the
+  gateway — one wildcard record `*.<host>` covers every environment
+
+Subdomains of a bare IP never resolve in DNS, which is why IP and
+localhost hosts get per-env ports instead of gateway routes.
 
 The CLI seeds the same value at stack bootstrap: `signet bootstrap --host
 <ip-or-domain>` (or `signet up --host …` when the bootstrap fires). On an
