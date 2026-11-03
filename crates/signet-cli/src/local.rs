@@ -295,6 +295,8 @@ fn ensure_cluster(bin: &Path) -> anyhow::Result<()> {
             .arg("--port")
             .arg("20000-20599:20000-20599@loadbalancer")
             .arg("--port")
+            .arg("20600-20999:20600-20999@loadbalancer")
+            .arg("--port")
             .arg("21000-21199:21000-21199@loadbalancer")
             .arg("--k3s-arg")
             .arg("--disable=traefik@server:0")
@@ -671,9 +673,7 @@ mod tests {
         let os = os_name();
         let url = k3d_download_url();
         assert!(url.starts_with("https://github.com/k3d-io/k3d/releases/latest/download/k3d-"));
-        assert!(
-            url.ends_with(&format!("-{os}-amd64")) || url.ends_with(&format!("-{os}-arm64"))
-        );
+        assert!(url.ends_with(&format!("-{os}-amd64")) || url.ends_with(&format!("-{os}-arm64")));
         let kubectl = kubectl_download_url();
         assert!(kubectl.contains("{version}"));
         assert!(

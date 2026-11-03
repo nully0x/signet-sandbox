@@ -22,6 +22,7 @@ cluster-up:
             --port "80:80@loadbalancer" \
             --port "443:443@loadbalancer" \
             --port "20000-20599:20000-20599@loadbalancer" \
+            --port "20600-20999:20600-20999@loadbalancer" \
             --port "21000-21199:21000-21199@loadbalancer" \
             --k3s-arg "--disable=traefik@server:0" \
             --volume signet-data:/var/lib/rancher/k3s/storage@server:0

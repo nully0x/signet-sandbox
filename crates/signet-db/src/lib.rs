@@ -31,7 +31,7 @@ pub struct EnvironmentRow {
     pub component_faucet: bool,
     pub rpc_endpoint: String,
     pub indexer_endpoint: Option<String>,
-    pub explorer_endpoint: Option<String>,
+    pub explorer_port: Option<i32>,
     pub faucet_endpoint: Option<String>,
     pub ln_endpoint: Option<String>,
     pub ttl_secs: Option<i64>,
@@ -59,7 +59,7 @@ pub struct NewEnvironment<'a> {
     pub component_indexer: bool,
     pub component_faucet: bool,
     pub rpc_endpoint: &'a str,
-    pub explorer_endpoint: Option<&'a str>,
+    pub explorer_port: Option<i32>,
     pub indexer_endpoint: Option<&'a str>,
     pub electrum_port: Option<i32>,
     pub ttl_secs: Option<i64>,
@@ -76,7 +76,7 @@ pub async fn create_environment(
         insert into environments (
             id, name, npub_owner, status, block_policy, signet_challenge,
             component_explorer, component_indexer, component_faucet,
-            rpc_endpoint, explorer_endpoint, indexer_endpoint, electrum_port, ttl_secs,
+            rpc_endpoint, explorer_port, indexer_endpoint, electrum_port, ttl_secs,
             expires_at, versions
         )
         values ($1, $2, $3, 'provisioning', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
@@ -92,7 +92,7 @@ pub async fn create_environment(
     .bind(env.component_indexer)
     .bind(env.component_faucet)
     .bind(env.rpc_endpoint)
-    .bind(env.explorer_endpoint)
+    .bind(env.explorer_port)
     .bind(env.indexer_endpoint)
     .bind(env.electrum_port)
     .bind(env.ttl_secs)
@@ -303,6 +303,22 @@ pub async fn next_electrum_port(
     let held: Vec<i32> = sqlx::query_scalar(
         "select electrum_port from environments \
          where electrum_port is not null and status in ('provisioning', 'ready', 'stopped')",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(DbError::from)?;
+    Ok(lowest_free_port(base, max, &held))
+}
+
+// Same sequential allocation as electrum ports, over the explorer pool.
+pub async fn next_explorer_port(
+    pool: &PgPool,
+    base: i32,
+    max: i32,
+) -> Result<Option<i32>, DbError> {
+    let held: Vec<i32> = sqlx::query_scalar(
+        "select explorer_port from environments \
+         where explorer_port is not null and status in ('provisioning', 'ready', 'stopped')",
     )
     .fetch_all(pool)
     .await

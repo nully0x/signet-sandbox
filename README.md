@@ -68,8 +68,8 @@ enforces the `ttl`.
 ## Status
 
 Shipped: NIP-98 and token auth, per-environment provisioning, faucet, electrs,
-explorer behind Envoy Gateway, LND instances with peering, TTL reaper, CLI,
-and the embedded dashboard.
+explorer (gateway subdomains on DNS hosts, per-env ports on IP/localhost
+hosts), LND instances with peering, TTL reaper, CLI, and the embedded dashboard.
 
 Not built yet: scenario controls (reorgs, stuck fees, RBF), TTL updates,
 snapshot and restore, a Helm chart, a CI action, and a hosted tier.

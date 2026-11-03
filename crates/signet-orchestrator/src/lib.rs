@@ -46,6 +46,13 @@ const GATEWAY_NAMESPACE: &str = "signet-platform";
 pub const ELECTRUM_PORT_BASE: i32 = 20000;
 pub const ELECTRUM_PORT_MAX: i32 = 20599;
 
+// Per-env explorer HTTP ports for env hosts that cannot carry
+// subdomains (an IP or localhost): the explorer is then exposed on its
+// own port instead of an env-<id> hostname through the gateway. Same
+// k3d port-map sync rule as the electrs window.
+pub const EXPLORER_PORT_BASE: i32 = 20600;
+pub const EXPLORER_PORT_MAX: i32 = 20999;
+
 // Per-instance lightning TCP ports: REST on the port, gRPC on port + 1,
 // p2p on port + 2 (one port triple per LND instance, allocated from the
 // same window, above the electrs range). Mapped by k3d at cluster create
@@ -408,6 +415,39 @@ fn explorer_hostname(env_host: &str, env_id: &str) -> String {
     format!("env-{env_id}.{env_host}")
 }
 
+/// Subdomains of an IP literal (or localhost) never resolve in DNS, so
+/// those env hosts expose the explorer on a per-env port; DNS hosts
+/// route `env-{id}.{host}` through the gateway.
+fn explorer_ports_enabled(host: &str) -> bool {
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    host == "localhost" || bare.parse::<std::net::IpAddr>().is_ok()
+}
+
+/// URL for one env's explorer, composed live from the env host. Port
+/// hosts use `{scheme}://{host}:{port}`; DNS hosts route
+/// `{scheme}://env-{id}.{host}` through the gateway. `None` when no
+/// explorer is provisioned or no port backs it.
+fn compose_explorer_url(
+    port_mode: bool,
+    url_scheme: &str,
+    env_host: &str,
+    ln_host: &str,
+    requested: bool,
+    env_id: &str,
+    explorer_port: Option<u16>,
+) -> Option<String> {
+    if !requested {
+        return None;
+    }
+    if port_mode {
+        return explorer_port.map(|p| format!("{url_scheme}://{}:{p}", ln_host));
+    }
+    Some(format!(
+        "{url_scheme}://{}",
+        explorer_hostname(env_host, env_id)
+    ))
+}
+
 // One instance's manifest with its name substituted; the public host
 // placeholder is filled in by the caller at apply time.
 fn lnd_manifest(instance: &LightningInstance) -> String {
@@ -488,6 +528,7 @@ pub struct ProvisionParams<'a> {
     pub images: &'a BTreeMap<String, String>,
     pub components: EnvComponents,
     pub electrum_port: Option<u16>,
+    pub explorer_port: Option<u16>,
     pub lightning: &'a [(LightningInstance, i32)],
     pub expires_at: Option<DateTime<Utc>>,
 }
@@ -500,25 +541,45 @@ pub struct Orchestrator {
     /// endpoint URLs use, and the cert SAN when it is an IP or domain.
     ln_host: String,
     url_scheme: String,
+    /// True when the env host cannot carry subdomains (an IP or
+    /// localhost): the explorer is exposed on a per-env port instead of
+    /// an env subdomain routed through the gateway.
+    explorer_ports: bool,
 }
 
 impl Orchestrator {
     pub async fn connect(env_host: &str) -> Result<Self, OrchestrateError> {
         let (url_scheme, host) = split_url_base(env_host);
         let ln_host = host.split(':').next().unwrap_or_default().to_string();
+        let explorer_ports = explorer_ports_enabled(&ln_host);
         Ok(Self {
             client: Client::try_default().await?,
             env_host: host,
             ln_host,
             url_scheme,
+            explorer_ports,
         })
     }
 
-    pub fn explorer_url(&self, env_id: &str) -> String {
-        format!(
-            "{}://{}",
-            self.url_scheme,
-            explorer_hostname(&self.env_host, env_id)
+    /// Whether explorer URLs ride per-env ports (IP/localhost env hosts).
+    pub fn uses_explorer_ports(&self) -> bool {
+        self.explorer_ports
+    }
+
+    pub fn explorer_url(
+        &self,
+        requested: bool,
+        env_id: &str,
+        explorer_port: Option<u16>,
+    ) -> Option<String> {
+        compose_explorer_url(
+            self.explorer_ports,
+            &self.url_scheme,
+            &self.env_host,
+            &self.ln_host,
+            requested,
+            env_id,
+            explorer_port,
         )
     }
 
@@ -529,7 +590,9 @@ impl Orchestrator {
         let env_id = params.env_id;
         let ns = namespace_for(env_id);
 
-        self.ensure_gateway().await?;
+        if !self.explorer_ports {
+            self.ensure_gateway().await?;
+        }
 
         let namespace = namespace_object(env_id, params.expires_at);
         Api::<Namespace>::all(self.client.clone())
@@ -602,12 +665,16 @@ impl Orchestrator {
         // connection bundles carry an instance only once its wallet
         // answers, and clients poll for that when they need lightning.
         if params.components.explorer {
-            self.apply_explorer_route(&ns, env_id).await?;
+            if let Some(port) = params.explorer_port {
+                self.apply_explorer_lb(&ns, port).await?;
+            } else {
+                self.apply_explorer_route(&ns, env_id).await?;
+            }
         }
         if let Some(port) = params.electrum_port {
             self.apply_electrs_lb(&ns, port).await?;
         }
-        if params.components.explorer || params.electrum_port.is_some() {
+        if !self.explorer_ports && (params.components.explorer || params.electrum_port.is_some()) {
             self.ensure_route_grant(&ns).await?;
         }
         Ok(())
@@ -1066,6 +1133,41 @@ impl Orchestrator {
                     port: port as i32,
                     target_port: Some(
                         k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(60401),
+                    ),
+                    protocol: Some("TCP".to_string()),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            status: None,
+        };
+        Api::<Service>::namespaced(self.client.clone(), ns)
+            .create(&PostParams::default(), &svc)
+            .await?;
+        Ok(())
+    }
+
+    // Explorer exposure for one env without a DNS name: a LoadBalancer
+    // Service whose port equals the env's allocated explorer port
+    // (klipper binds it on the node; the local k3d cluster publishes
+    // the same host ports).
+    async fn apply_explorer_lb(&self, ns: &str, port: u16) -> Result<(), OrchestrateError> {
+        let svc = Service {
+            metadata: ObjectMeta {
+                name: Some("explorer-lb".to_string()),
+                namespace: Some(ns.to_string()),
+                ..Default::default()
+            },
+            spec: Some(k8s_openapi::api::core::v1::ServiceSpec {
+                type_: Some("LoadBalancer".to_string()),
+                selector: Some(BTreeMap::from([(
+                    "app".to_string(),
+                    "explorer".to_string(),
+                )])),
+                ports: Some(vec![k8s_openapi::api::core::v1::ServicePort {
+                    port: port as i32,
+                    target_port: Some(
+                        k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(8080),
                     ),
                     protocol: Some("TCP".to_string()),
                     ..Default::default()
@@ -1662,6 +1764,60 @@ mod tests {
                 "{tag:?}"
             );
         }
+    }
+
+    #[test]
+    fn explorer_ports_follow_the_env_host_form() {
+        for host in ["localhost", "127.0.0.1", "192.168.100.2", "[::1]"] {
+            assert!(explorer_ports_enabled(host), "{host}");
+        }
+        for host in ["sandbox.example.com", "", "signet.internal"] {
+            assert!(!explorer_ports_enabled(host), "{host}");
+        }
+    }
+
+    #[test]
+    fn explorer_urls_follow_the_exposure_mode() {
+        assert_eq!(
+            compose_explorer_url(
+                false,
+                "http",
+                "sandbox.example.com",
+                "sandbox.example.com",
+                true,
+                "9f2a1b",
+                None,
+            ),
+            Some("http://env-9f2a1b.sandbox.example.com".to_string())
+        );
+        assert_eq!(
+            compose_explorer_url(
+                true,
+                "http",
+                "192.168.100.2",
+                "192.168.100.2",
+                true,
+                "9f2a1b",
+                Some(20600),
+            ),
+            Some("http://192.168.100.2:20600".to_string())
+        );
+        assert_eq!(
+            compose_explorer_url(true, "http", "localhost", "localhost", true, "9f2a1b", None),
+            None
+        );
+        assert_eq!(
+            compose_explorer_url(
+                false,
+                "http",
+                "sandbox.example.com",
+                "sandbox.example.com",
+                false,
+                "9f2a1b",
+                None,
+            ),
+            None
+        );
     }
 
     #[test]

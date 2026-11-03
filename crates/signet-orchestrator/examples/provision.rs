@@ -61,6 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap(),
                     components,
                     electrum_port: None,
+                    explorer_port: None,
                     lightning: &[],
                     expires_at,
                 })

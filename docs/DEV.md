@@ -237,11 +237,13 @@ public key, read with `lncli getinfo` in the pod) and `node_uri`
 
 One host drives everything: SIGNET_ENV_HOST (seeded by `signet
 bootstrap --host <ip-or-domain>`) is the lightning endpoint host, the
-cert SAN, and the explorer hostname base. An IP gives remote lightning
-clients direct connectivity; the per-env explorer URLs then read
-`env-<id>.<ip>` and resolve only with an /etc/hosts line (`<ip>
-env-<id>.<ip>`) on the dialing machine — the gateway routes by hostname,
-so the entry is needed wherever the explorer is opened.
+cert SAN, and the explorer exposure mode. An IP gives remote lightning
+clients direct connectivity. The explorer URL follows the host form:
+DNS hosts route `env-<id>.<host>` through the gateway (one wildcard
+record `*.<host>` covers every environment); an IP or localhost host
+cannot carry subdomains, so the explorer gets a per-env port from the
+20600-20999 pool and the URL reads `http://<host>:<port>` — resolvable
+everywhere, no /etc/hosts needed.
 
 The CLI seeds the same value at stack bootstrap: `signet bootstrap --host
 <ip-or-domain>` (or `signet up --host …` when the bootstrap fires). On an

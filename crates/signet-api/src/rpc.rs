@@ -395,11 +395,40 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
     };
 
     let rpc_endpoint = format!("{}/env/{env_id}/rpc", state.public_url);
-    let explorer_endpoint = params
-        .components
-        .explorer
-        .then(|| state.orchestrator.explorer_url(&short_id(env_id)));
     let electrs_requested = indexer || params.components.explorer;
+    let explorer_port = if params.components.explorer && state.orchestrator.uses_explorer_ports() {
+        match signet_db::next_explorer_port(
+            &state.pool,
+            signet_orchestrator::EXPLORER_PORT_BASE,
+            signet_orchestrator::EXPLORER_PORT_MAX,
+        )
+        .await
+        {
+            Ok(Some(port)) => Some(port),
+            Ok(None) => {
+                return Response::error(
+                    Some(id),
+                    Error::new(
+                        INVALID_PARAMS,
+                        format!(
+                            "explorer port range exhausted ({}-{})",
+                            signet_orchestrator::EXPLORER_PORT_BASE,
+                            signet_orchestrator::EXPLORER_PORT_MAX,
+                        ),
+                    ),
+                );
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "explorer port allocation failed");
+                return Response::error(
+                    Some(id),
+                    Error::new(INTERNAL_ERROR, "port allocation failed"),
+                );
+            }
+        }
+    } else {
+        None
+    };
     let electrum_port = if electrs_requested {
         match signet_db::next_electrum_port(
             &state.pool,
@@ -444,7 +473,7 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
         component_indexer: indexer,
         component_faucet: params.components.faucet,
         rpc_endpoint: &rpc_endpoint,
-        explorer_endpoint: explorer_endpoint.as_deref(),
+        explorer_port,
         indexer_endpoint: indexer_endpoint.as_deref(),
         electrum_port,
         ttl_secs: params.ttl_secs,
@@ -519,6 +548,7 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
             lightning: params.components.lightning.clone(),
         },
         electrum_port: electrum_port.map(|p| p as u16),
+        explorer_port: explorer_port.map(|p| p as u16),
         lightning: &lightning,
         expires_at,
     };
@@ -560,6 +590,11 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
             EnvStatus::Provisioning,
             Some(format!("{rpc_user}:{rpc_password}")),
             BTreeMap::new(),
+            state.orchestrator.explorer_url(
+                params.components.explorer,
+                &short_id(env_id),
+                explorer_port.map(|p| p as u16),
+            ),
         ))
         .expect("bundle serializes"),
     )
@@ -616,9 +651,14 @@ async fn bundle_response(
         .ok()
         .map(|(u, p)| format!("{u}:{p}"));
     let lightning = lightning_connections(state, row.id, status).await;
+    let explorer_url = state.orchestrator.explorer_url(
+        row.component_explorer,
+        &short_id(row.id),
+        row.explorer_port.map(|p| p as u16),
+    );
     Response::result(
         Some(id),
-        serde_json::to_value(bundle_for(row, status, rpc_auth, lightning))
+        serde_json::to_value(bundle_for(row, status, rpc_auth, lightning, explorer_url))
             .expect("bundle serializes"),
     )
 }
@@ -1227,6 +1267,7 @@ fn bundle_for(
     status: EnvStatus,
     rpc_auth: Option<String>,
     lightning: BTreeMap<String, LightningConnection>,
+    explorer_url: Option<String>,
 ) -> ConnectionBundle {
     ConnectionBundle {
         environment_id: row.id.to_string(),
@@ -1235,7 +1276,7 @@ fn bundle_for(
         rpc_auth,
         zmq_url: None,
         indexer_endpoint: row.indexer_endpoint.clone(),
-        explorer_url: row.explorer_endpoint.clone(),
+        explorer_url,
         faucet_url: row.faucet_endpoint.clone(),
         lightning,
         signet_challenge: row.signet_challenge.clone(),
@@ -1546,7 +1587,7 @@ mod tests {
             component_faucet: false,
             rpc_endpoint: "http://x/rpc".into(),
             indexer_endpoint: None,
-            explorer_endpoint: None,
+            explorer_port: None,
             faucet_endpoint: None,
             ln_endpoint: None,
             ttl_secs: None,
@@ -1560,6 +1601,7 @@ mod tests {
             EnvStatus::Provisioning,
             None,
             BTreeMap::new(),
+            None,
         ))
         .unwrap();
         for absent in [
@@ -1588,7 +1630,7 @@ mod tests {
             component_faucet: false,
             rpc_endpoint: "http://x/rpc".into(),
             indexer_endpoint: None,
-            explorer_endpoint: None,
+            explorer_port: None,
             faucet_endpoint: None,
             ln_endpoint: None,
             ttl_secs: None,
@@ -1598,11 +1640,52 @@ mod tests {
             versions: None,
         };
         row.versions = Some(serde_json::json!({ "bitcoind": "bitcoin/bitcoin:28.1" }));
-        let json = serde_json::to_value(bundle_for(&row, EnvStatus::Ready, None, BTreeMap::new()))
-            .unwrap();
+        let json = serde_json::to_value(bundle_for(
+            &row,
+            EnvStatus::Ready,
+            None,
+            BTreeMap::new(),
+            None,
+        ))
+        .unwrap();
         assert_eq!(
             json["versions"]["bitcoind"],
             serde_json::json!("bitcoin/bitcoin:28.1")
         );
+    }
+
+    #[test]
+    fn bundle_carries_the_composed_explorer_url() {
+        let row = EnvironmentRow {
+            id: Uuid::now_v7(),
+            name: "x".into(),
+            npub_owner: "npub1x".into(),
+            workspace_id: None,
+            status: "ready".into(),
+            block_policy: "interval_30s".into(),
+            signet_challenge: "512100ae".into(),
+            component_explorer: true,
+            component_indexer: true,
+            component_faucet: false,
+            rpc_endpoint: "http://x/rpc".into(),
+            indexer_endpoint: Some("tcp://localhost:20000".into()),
+            explorer_port: Some(20600),
+            faucet_endpoint: None,
+            ln_endpoint: None,
+            ttl_secs: None,
+            created_at: Utc::now(),
+            expires_at: None,
+            current_snapshot_id: None,
+            versions: None,
+        };
+        let json = serde_json::to_value(bundle_for(
+            &row,
+            EnvStatus::Ready,
+            None,
+            BTreeMap::new(),
+            Some("http://192.168.100.2:20600".to_string()),
+        ))
+        .unwrap();
+        assert_eq!(json["explorer_url"], "http://192.168.100.2:20600");
     }
 }
