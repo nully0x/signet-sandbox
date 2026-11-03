@@ -165,15 +165,55 @@ fn have_on_path(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Release binaries stream over slow links; the blocking client's default
+/// 30s total timeout aborts mid-body, so bound only the connect phase and
+/// retry stalled reads instead.
+fn download_client() -> anyhow::Result<reqwest::blocking::Client> {
+    reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .build()
+        .map_err(anyhow::Error::new)
+}
+
+fn fetch_with_retries<T>(
+    url: &str,
+    read: impl Fn(reqwest::blocking::Response) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    let client = download_client()?;
+    let mut last_err = None;
+    for attempt in 1..=3 {
+        let outcome = client
+            .get(url)
+            .send()
+            .map_err(anyhow::Error::new)
+            .and_then(|res| {
+                // a bad status is a wrong URL, not a stall: fail fast
+                res.error_for_status()
+                    .map_err(anyhow::Error::new)
+                    .and_then(&read)
+            });
+        match outcome {
+            Ok(value) => return Ok(value),
+            Err(err) => {
+                if attempt < 3 {
+                    eprintln!("download attempt {attempt}/3 failed ({err}); retrying in 5s");
+                    std::thread::sleep(Duration::from_secs(5));
+                }
+                last_err = Some(err);
+            }
+        }
+    }
+    Err(last_err
+        .expect("at least one download attempt")
+        .context(format!("download failed after 3 attempts: {url}")))
+}
+
 fn fetch_text(url: &str) -> anyhow::Result<String> {
-    Ok(reqwest::blocking::get(url)?.error_for_status()?.text()?)
+    fetch_with_retries(url, |res| Ok(res.text()?))
 }
 
 fn fetch_bytes(url: &str) -> anyhow::Result<Vec<u8>> {
-    Ok(reqwest::blocking::get(url)?
-        .error_for_status()?
-        .bytes()?
-        .to_vec())
+    fetch_with_retries(url, |res| Ok(res.bytes()?.to_vec()))
 }
 
 fn k3d_download_url() -> String {
