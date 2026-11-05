@@ -194,9 +194,15 @@ Lock files, generated files, and vendored code get their own commits.
     klipper has no VIP or failover.
 17. **k3d serverlb (one nginx) fails past ~1k published ports** — restart
     loop, no `start worker processes` log line (~1.2k maps failed; ~800
-    ran for months). Local therefore publishes ONE window, 20000-20399,
-    partitioned electrs 20000-20099, explorer 20100-20199, lightning
-    20200-20399 (`justfile cluster-up` and `signet-cli` local.rs must
-    cover it exactly). Add capacity by re-partitioning that window, never
-    by appending a range. Hosted (DNS env host) publishes nothing per
-    env — the gateway carries it on 80/443.
+    ran for months), and k3d's failed-start rollback then DELETES the
+    whole cluster (only non-k3d-prefixed volumes like `signet-data`
+    survive). The lb cannot be dropped: every k3d `-p` is a proxy-type
+    mapping owned by the lb, and `--no-lb` rejects them outright, so
+    the published count stays small: 80 (gateway), 8081 (local api),
+    34611 (k3s api), and ONE window 20000-20399, partitioned electrs
+    20000-20099, explorer 20100-20199, lightning 20200-20399.
+    `signet-cli` local.rs derives create args and its drift check from
+    the same constants and recreates a drifted cluster before k3d's
+    rollback can eat it. Add capacity by re-partitioning that window,
+    never by appending a range. Hosted (DNS env host) publishes nothing
+    per env — the gateway carries it on 80/443.

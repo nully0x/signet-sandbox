@@ -1,6 +1,7 @@
 // Local mode bootstrap: one long-lived k3d cluster hosting the API and the
 // environment namespaces. Mirrors `just cluster-up`.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -61,6 +62,19 @@ fn full_image(registry: &str, name: &str) -> String {
 }
 
 const NODE_READY_TIMEOUT_SECS: u64 = 180;
+
+/// k3s api port published on the server node (--api-port).
+const K3S_API_PORT: u32 = 34611;
+/// Fixed ports published on the server node: gateway HTTP and the local
+/// provisioning api.
+const SINGLE_PORTS: &[u32] = &[80, 8081];
+/// Per-env window: one range, partitioned by the orchestrator (electrs,
+/// explorer, lightning). Re-partition to add capacity; never append.
+const ENV_PORT_WINDOW: (u32, u32) = (20000, 20399);
+
+/// k3d releases move the cluster spec forward; a vendored copy older
+/// than this gets replaced by the latest download on the next bootstrap.
+const MIN_K3D_VERSION: (u32, u32) = (5, 9);
 
 pub fn bootstrap(host: &str) -> anyhow::Result<()> {
     let bin = ensure_prerequisites()?;
@@ -131,7 +145,7 @@ pub fn status() -> anyhow::Result<()> {
 /// reused and the token re-minted by the next `signet local init`.
 pub fn teardown() -> anyhow::Result<()> {
     let bin = bin_dir()?;
-    run(k3d(&bin)?.args(["cluster", "delete", CLUSTER]))?;
+    delete_cluster(&bin)?;
     println!("cluster `{CLUSTER}` deleted (profile kept at ~/.signet/config.toml)");
     Ok(())
 }
@@ -149,6 +163,7 @@ fn ensure_prerequisites() -> anyhow::Result<PathBuf> {
     }
     let bin = bin_dir()?;
     std::fs::create_dir_all(&bin)?;
+    ensure_k3d_version(&bin)?;
     Ok(bin)
 }
 
@@ -301,6 +316,53 @@ fn k3d(bin: &Path) -> anyhow::Result<Command> {
     tool(bin, "k3d", &k3d_download_url(), None)
 }
 
+/// Replace a vendored k3d older than MIN_K3D_VERSION; warn on an old
+/// PATH copy, which this tool does not own. Missing k3d is fine: the
+/// later tool() download is latest by construction.
+fn ensure_k3d_version(bin: &Path) -> anyhow::Result<()> {
+    let vendored = bin.join("k3d");
+    let resolved = if vendored.exists() {
+        vendored.clone()
+    } else if have_on_path("k3d") {
+        PathBuf::from("k3d")
+    } else {
+        return Ok(());
+    };
+    let out = Command::new(&resolved).arg("version").output()?;
+    let Some(version) = parse_k3d_version(&String::from_utf8_lossy(&out.stdout)) else {
+        return Ok(()); // unparsable: let the create path fail loudly instead
+    };
+    if version >= MIN_K3D_VERSION {
+        return Ok(());
+    }
+    if vendored.exists() {
+        println!(
+            "replacing vendored k3d {:?}: older than the required {:?}",
+            version, MIN_K3D_VERSION
+        );
+        std::fs::remove_file(&vendored)?;
+    } else {
+        eprintln!(
+            "warning: k3d on PATH is {:?}; the cluster spec needs {:?} or newer",
+            version, MIN_K3D_VERSION
+        );
+    }
+    Ok(())
+}
+
+/// (major, minor) from `k3d version` output ("k3d version v5.9.0 ...").
+fn parse_k3d_version(output: &str) -> Option<(u32, u32)> {
+    let line = output.lines().next()?;
+    let token = line
+        .split_whitespace()
+        // the semver token, not neighboring words like "version"
+        .find(|t| t.starts_with('v') && t[1..].starts_with(|c: char| c.is_ascii_digit()))?;
+    let mut parts = token.trim_start_matches('v').split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    Some((major, minor))
+}
+
 fn kubectl(bin: &Path) -> anyhow::Result<Command> {
     tool(
         bin,
@@ -317,31 +379,143 @@ fn ensure_cluster(bin: &Path) -> anyhow::Result<()> {
         .map(|o| o.status.success())
         .unwrap_or(false);
 
-    if exists {
-        println!("cluster exists; starting");
-        run(k3d(bin)?.args(["cluster", "start", CLUSTER]))?;
-    } else {
+    if !exists {
         println!("creating k3d cluster `{CLUSTER}`");
-        run(k3d(bin)?
-            .args(["cluster", "create", CLUSTER])
-            .arg("--api-port")
-            .arg("34611")
-            .arg("--port")
-            .arg("80:80@loadbalancer")
-            .arg("--port")
-            .arg("443:443@loadbalancer")
-            .arg("--port")
-            .arg("8081:8081@loadbalancer")
-            .arg("--port")
-            .arg("20000-20399:20000-20399@loadbalancer")
-            .arg("--k3s-arg")
-            .arg("--disable=traefik@server:0")
-            .arg("--volume")
-            .arg("signet-data:/var/lib/rancher/k3s/storage@server:0"))?;
-        run(k3d(bin)?.args(["kubeconfig", "write", CLUSTER]))?;
+        create_cluster(bin)?;
+    } else if cluster_spec_drifted() {
+        println!("cluster `{CLUSTER}` predates the current port spec; recreating");
+        delete_cluster(bin)?;
+        create_cluster(bin)?;
+    } else {
+        println!("cluster exists; starting");
+        if start_cluster(bin)? {
+            // k3d's failed-start rollback deletes the cluster; rebuild it.
+            println!("cluster start failed and k3d deleted it; recreating");
+            create_cluster(bin)?;
+        }
     }
 
     wait_for_node(bin)?;
+    Ok(())
+}
+
+/// Create the cluster with the default k3d serverlb: every `--port` is
+/// a proxy-type mapping the lb owns, so the lb cannot be dropped and the
+/// published count must stay well under nginx's ~1k-mapping ceiling —
+/// one fixed window, never appended ranges. Create args and drift
+/// detection both derive from the port constants, so they cannot
+/// disagree.
+fn create_cluster(bin: &Path) -> anyhow::Result<()> {
+    let mut binding = k3d(bin)?;
+    let cmd = binding
+        .args(["cluster", "create", CLUSTER])
+        .arg("--api-port")
+        .arg(K3S_API_PORT.to_string());
+    for port in SINGLE_PORTS {
+        cmd.arg("--port").arg(format!("{port}:{port}@loadbalancer"));
+    }
+    let (start, end) = ENV_PORT_WINDOW;
+    cmd.arg("--port")
+        .arg(format!("{start}-{end}:{start}-{end}@loadbalancer"));
+    cmd.arg("--k3s-arg").arg("--disable=traefik@server:0");
+    cmd.arg("--volume")
+        .arg("signet-data:/var/lib/rancher/k3s/storage@server:0");
+    run(cmd)?;
+    run(k3d(bin)?.args(["kubeconfig", "write", CLUSTER]))?;
+    Ok(())
+}
+
+/// Start the existing cluster. Returns true when the start failed and
+/// k3d's rollback deleted the cluster; the caller recreates in that
+/// case. A start that leaves the cluster behind is a real failure and
+/// surfaces as an error.
+fn start_cluster(bin: &Path) -> anyhow::Result<bool> {
+    let out = k3d(bin)?.args(["cluster", "start", CLUSTER]).output()?;
+    if out.status.success() {
+        return Ok(false);
+    }
+    let still_exists = k3d(bin)?
+        .args(["cluster", "get", CLUSTER])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if still_exists {
+        anyhow::bail!(
+            "cluster start failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(true)
+}
+
+fn delete_cluster(bin: &Path) -> anyhow::Result<()> {
+    run(k3d(bin)?.args(["cluster", "delete", CLUSTER]))
+}
+
+/// True when the existing cluster cannot have been created by the
+/// current spec: the serverlb container owns every published port, so a
+/// missing serverlb or any difference in its port bindings marks an
+/// older or foreign spec. Uninspectable state counts as no drift — the
+/// start path then recovers a cluster that k3d deletes on rollback.
+fn cluster_spec_drifted() -> bool {
+    let serverlb = format!("k3d-{CLUSTER}-serverlb");
+    let out = match Command::new("docker")
+        .args([
+            "inspect",
+            &serverlb,
+            "--format",
+            "{{json .HostConfig.PortBindings}}",
+        ])
+        .output()
+    {
+        Ok(out) if out.status.success() => out,
+        _ => return true, // no serverlb: the current spec cannot be served
+    };
+    match parse_host_port_bindings(&String::from_utf8_lossy(&out.stdout)) {
+        Ok(actual) => actual != expected_host_ports(),
+        Err(_) => false,
+    }
+}
+
+/// Host ports the local cluster must publish.
+fn expected_host_ports() -> BTreeSet<u32> {
+    let mut ports: BTreeSet<u32> = SINGLE_PORTS.iter().copied().collect();
+    ports.insert(K3S_API_PORT);
+    ports.extend(ENV_PORT_WINDOW.0..=ENV_PORT_WINDOW.1);
+    ports
+}
+
+/// Host ports from `docker inspect --format '{{json .HostConfig.PortBindings}}'`.
+/// Keys are container-side ("80/tcp", "20000-20399/tcp"); each binding's
+/// host side is HostPort, falling back to the key's port.
+fn parse_host_port_bindings(json: &str) -> anyhow::Result<BTreeSet<u32>> {
+    let bindings: BTreeMap<String, serde_json::Value> = serde_json::from_str(json)?;
+    let mut ports = BTreeSet::new();
+    for (key, entries) in bindings {
+        let Some(list) = entries.as_array() else {
+            continue; // null: container port exists but is not published
+        };
+        if list.is_empty() {
+            continue; // same meaning as null
+        }
+        let key_port = key.split('/').next().unwrap_or_default();
+        for entry in list {
+            match entry.get("HostPort").and_then(|p| p.as_str()) {
+                Some(host_port) if !host_port.is_empty() => push_host_port(&mut ports, host_port)?,
+                _ => push_host_port(&mut ports, key_port)?,
+            }
+        }
+    }
+    Ok(ports)
+}
+
+fn push_host_port(ports: &mut BTreeSet<u32>, value: &str) -> anyhow::Result<()> {
+    let (start, end) = value.split_once('-').unwrap_or((value, value));
+    let start: u32 = start
+        .parse()
+        .context(format!("bad port binding: {value}"))?;
+    let end: u32 = end.parse().context(format!("bad port binding: {value}"))?;
+    ports.extend(start..=end);
     Ok(())
 }
 
@@ -716,6 +890,53 @@ mod tests {
             kubectl.contains(&format!("/bin/{os}/amd64/"))
                 || kubectl.contains(&format!("/bin/{os}/arm64/"))
         );
+    }
+
+    #[test]
+    fn expected_ports_cover_fixed_and_window() {
+        let ports = expected_host_ports();
+        assert_eq!(ports.len(), 403);
+        for port in [80, 8081, 34611, 20000, 20399] {
+            assert!(ports.contains(&port), "missing {port}");
+        }
+        assert!(!ports.contains(&443));
+    }
+
+    #[test]
+    fn port_bindings_parse_singles_ranges_and_nulls() {
+        let json = r#"{
+            "80/tcp": [{"HostIp": "0.0.0.0", "HostPort": "80"}],
+            "8081/tcp": [{"HostIp": "", "HostPort": "8081"}],
+            "20000/tcp": [{"HostIp": "0.0.0.0", "HostPort": "20000"}],
+            "20001-20003/tcp": [{"HostIp": "0.0.0.0", "HostPort": "20001-20003"}],
+            "20399/tcp": [],
+            "443/tcp": null,
+            "9000/tcp": [{"HostIp": "", "HostPort": ""}]
+        }"#;
+        let ports = parse_host_port_bindings(json).unwrap();
+        assert!(ports.contains(&80));
+        assert!(ports.contains(&8081));
+        assert!(ports.contains(&20000));
+        assert!(ports.contains(&20003));
+        assert!(ports.contains(&9000));
+        // empty array and null both mean "not published"
+        assert!(!ports.contains(&20399));
+        assert!(!ports.contains(&443));
+        assert_eq!(ports.intersection(&expected_host_ports()).count(), 6);
+    }
+
+    #[test]
+    fn port_bindings_reject_garbage() {
+        assert!(parse_host_port_bindings("not json").is_err());
+        assert!(parse_host_port_bindings(r#"{"x/tcp": [{"HostPort": "abc"}]}"#).is_err());
+    }
+
+    #[test]
+    fn k3d_version_parses_from_banner() {
+        let out = "k3d version v5.9.0\nk3s version v1.32.5-k3s1 (default)";
+        assert_eq!(parse_k3d_version(out), Some((5, 9)));
+        assert_eq!(parse_k3d_version("k3d version devel"), None);
+        assert_eq!(parse_k3d_version(""), None);
     }
 
     #[test]

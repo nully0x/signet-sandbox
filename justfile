@@ -20,7 +20,7 @@ cluster-up:
         k3d cluster create {{cluster}} \
             --api-port 34611 \
             --port "80:80@loadbalancer" \
-            --port "443:443@loadbalancer" \
+            --port "8081:8081@loadbalancer" \
             --port "20000-20399:20000-20399@loadbalancer" \
             --k3s-arg "--disable=traefik@server:0" \
             --volume signet-data:/var/lib/rancher/k3s/storage@server:0
