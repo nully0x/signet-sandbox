@@ -23,7 +23,9 @@
     instances.filter((n) => !DNS_LABEL.test(n)),
   )
   const formValid = $derived(
-    DNS_LABEL.test(name) && TTL.test(ttl) && invalidInstances.length === 0,
+    DNS_LABEL.test(name) &&
+      (!ttl.trim() || TTL.test(ttl.trim())) &&
+      invalidInstances.length === 0,
   )
 
   function parseTtlSeconds(raw: string): number | null {
@@ -52,7 +54,7 @@
     try {
       await api.create({
         name: name.trim(),
-        ttl_secs: parseTtlSeconds(ttl.trim()),
+        ttl_secs: ttl.trim() ? parseTtlSeconds(ttl.trim()) : null,
         components: {
           indexer,
           faucet,
@@ -81,7 +83,7 @@
   <div class="field">
     <label for="f-ttl">ttl</label>
     <input id="f-ttl" class="input" bind:value={ttl} placeholder="20m" spellcheck="false" />
-    <span class="hint">seconds, minutes, hours, days — e.g. 45s, 20m, 6h, 2d</span>
+    <span class="hint">seconds, minutes, hours, days — e.g. 45s, 20m, 6h, 2d; empty = no expiry</span>
   </div>
 
   <div class="field">

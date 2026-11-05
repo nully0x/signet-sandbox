@@ -155,9 +155,10 @@ local-setup *ARGS:
 ui-build:
     npm --prefix ui run build
 
-# run the API natively (reads .env)
+# run the API natively (reads .env); 8081 belongs to the in-cluster api
+# of a bootstrapped local-mode cluster, so native dev binds 8090
 dev-api:
-    cargo run -p signet-api
+    cargo run -p signet-api -- --listen 0.0.0.0:8090
 
 # bitcoind + postgres via docker compose (reads .env); waits for healthchecks
 dev-up:
@@ -179,7 +180,8 @@ dev-ps:
 dev-signer *ARGS:
     cargo run -p signet-signer -- {{ARGS}}
 
-# mint a bearer API token from the dev NIP-98 key (prints the raw token)
+# mint a bearer API token from the dev NIP-98 key (prints the raw token);
+# targets the native dev api (see dev-api) — 8081 is the in-cluster api
 get-token:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -188,7 +190,7 @@ get-token:
         echo '  echo "SIGNET_DEV_NSEC=$(openssl rand -hex 32)" >> .env'
         exit 1
     fi
-    cargo run -q -p signet-cli -- token --nsec "$SIGNET_DEV_NSEC"
+    SIGNET_API=http://localhost:8090 cargo run -q -p signet-cli -- token --nsec "$SIGNET_DEV_NSEC"
 
 # build and install the signet cli into ~/.local/bin (on PATH after a rehash)
 install-cli:
