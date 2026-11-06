@@ -53,18 +53,11 @@
 
         <section id="install">
           <h2>Install</h2>
-          <p>The CLI is one binary named <code>signet</code>. Install it from a package registry, so you never clone the repository.</p>
-          <table class="docs-table">
-            <thead>
-              <tr><th scope="col">Route</th><th scope="col">Command</th><th scope="col">Status</th></tr>
-            </thead>
-            <tbody>
-              <tr><th scope="row">Cargo</th><td><code>cargo install signet-sandbox</code></td><td><span class="tag">COMING SOON</span></td></tr>
-              <tr><th scope="row">Shell installer</th><td>One-line script that picks the binary for your platform</td><td><span class="tag">COMING SOON</span></td></tr>
-              <tr><th scope="row">npm</th><td><code>npm install -g signet-sandbox</code></td><td><span class="tag">COMING SOON</span></td></tr>
-            </tbody>
-          </table>
-          <p>None of these are published yet. The commands above are the release shape, and they activate at the first CLI release. Until then, build instructions live in the repository.</p>
+          <p>The CLI is one binary named <code>signet</code>. One line installs it: no repository clone, no sudo.</p>
+          <pre class="code-block"><span class="prompt">$ </span>curl -fsSL https://nully0x.github.io/signet-sandbox/install.sh | sh</pre>
+          <p>The script detects your platform, verifies the release checksum, and installs into <code>~/.local/bin</code> (override with <code>SIGNET_INSTALL_DIR</code>). It covers linux x86_64/arm64 and macOS x86_64/arm64; windows is not supported.</p>
+          <p>Pass arguments after <code>--</code>. Pin a release: <code>... | sh -s -- --version v0.1.0</code>. Remove the binary: <code>... | sh -s -- uninstall</code>.</p>
+          <p>Upgrading is the same line: the script skips work when the newest release is already installed. Profile data at <code>~/.signet</code> survives both upgrades and uninstall.</p>
           <p>Docker is the only runtime prerequisite. Start the daemon before you provision anything.</p>
         </section>
 

@@ -69,10 +69,9 @@
             <h2>Install</h2>
             <span class="mono">01 / CLI</span>
           </div>
-          <p>One binary named signet, installed from a package registry. No repository clone.</p>
-          <pre class="code-block"><span class="prompt">$ </span>cargo install signet-sandbox
-<span class="prompt">$ </span>npm install -g signet-sandbox</pre>
-          <p class="panel-note"><span class="tag">COMING SOON</span> Neither package is published yet. Both commands activate at the first CLI release.</p>
+          <p>One binary named signet, installed by a shell script. No repository clone.</p>
+          <pre class="code-block"><span class="prompt">$ </span>curl -fsSL https://nully0x.github.io/signet-sandbox/install.sh | sh</pre>
+          <p class="panel-note"><span class="tag">LINUX · MACOS</span> x86_64 and arm64. Re-run the same line to upgrade.</p>
           <ul class="requirements">
             <li><span class="req-dot" aria-hidden="true"></span> Docker daemon, running: Docker Desktop, colima, or OrbStack</li>
             <li><span class="req-dot" aria-hidden="true"></span> Nothing else. You never manage servers or the platform underneath</li>
