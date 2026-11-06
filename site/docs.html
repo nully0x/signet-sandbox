@@ -54,10 +54,16 @@
         <section id="install">
           <h2>Install</h2>
           <p>The CLI is one binary named <code>signet</code>. One line installs it: no repository clone, no sudo.</p>
-          <pre class="code-block"><span class="prompt">$ </span>curl -fsSL https://nully0x.github.io/signet-sandbox/install.sh | sh</pre>
+          <pre class="code-block copyable"><span class="prompt">$ </span><code class="cmd-text">curl -fsSL https://nully0x.github.io/signet-sandbox/install.sh | sh</code><button class="code-copy" type="button" aria-label="Copy the install command">copy</button></pre>
           <p>The script detects your platform, verifies the release checksum, and installs into <code>~/.local/bin</code> (override with <code>SIGNET_INSTALL_DIR</code>). It covers linux x86_64/arm64 and macOS x86_64/arm64; windows is not supported.</p>
-          <p>Pass arguments after <code>--</code>. Pin a release: <code>... | sh -s -- --version v0.1.0</code>. Remove the binary: <code>... | sh -s -- uninstall</code>.</p>
-          <p>Upgrading is the same line: the script skips work when the newest release is already installed. Profile data at <code>~/.signet</code> survives both upgrades and uninstall.</p>
+          <h3>Upgrade</h3>
+          <p>Re-run the same line. The script skips work when the newest release is already installed.</p>
+          <h3>Pin a version</h3>
+          <p>The default line always installs the newest release. To install an exact one, pass <code>--version</code> with any tag from the <a href="https://github.com/nully0x/signet-sandbox/releases">releases page</a>; <code>v0.1.0</code> here is an example.</p>
+          <pre class="code-block copyable"><span class="prompt">$ </span><code class="cmd-text">curl -fsSL https://nully0x.github.io/signet-sandbox/install.sh | sh -s -- --version v0.1.0</code><button class="code-copy" type="button" aria-label="Copy the pinned install command">copy</button></pre>
+          <h3>Uninstall</h3>
+          <pre class="code-block copyable"><span class="prompt">$ </span><code class="cmd-text">curl -fsSL https://nully0x.github.io/signet-sandbox/install.sh | sh -s -- uninstall</code><button class="code-copy" type="button" aria-label="Copy the uninstall command">copy</button></pre>
+          <p>Uninstalling removes only the binary at <code>~/.local/bin/signet</code>. Your identity and connection profile at <code>~/.signet</code> are kept; delete that directory too if you want a full cleanup. From a repository clone, <code>scripts/install.sh uninstall</code> does the same thing.</p>
           <p>Docker is the only runtime prerequisite. Start the daemon before you provision anything.</p>
         </section>
 
@@ -69,7 +75,7 @@
           <p><code>bootstrap</code> prepares the local platform, starts the API with its database, and writes a profile. That profile identity owns every environment you create. The API also serves the dashboard.</p>
           <pre class="code-block"><span class="prompt">$ </span>signet bootstrap</pre>
           <p>Pass the advertised host when other machines must reach the endpoints:</p>
-          <pre class="code-block"><span class="prompt">$ </span>signet bootstrap --host 192.168.100.2</pre>
+          <pre class="code-block"><span class="prompt">$ </span>signet bootstrap --host &lt;host machine ip&gt;</pre>
           <p>Endpoints default to localhost, which limits them to this machine. The advertised host is the endpoint host, the certificate name, and the explorer hostname base. Choose it at the first bootstrap, because the flag does nothing on a stack that already runs. To change it later, run <code>signet bootstrap --host</code> again with the new value, then mint new credentials for the new URLs.</p>
 
           <h3>Step 2. Check the stack</h3>
@@ -281,5 +287,6 @@ p2p    localhost:21002</pre>
         <a href="https://github.com/nully0x/signet-sandbox">Source <span aria-hidden="true">↗</span></a>
       </div>
     </footer>
+    <script src="script.js" defer></script>
   </body>
 </html>

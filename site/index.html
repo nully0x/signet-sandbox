@@ -70,7 +70,7 @@
             <span class="mono">01 / CLI</span>
           </div>
           <p>One binary named signet, installed by a shell script. No repository clone.</p>
-          <pre class="code-block"><span class="prompt">$ </span>curl -fsSL https://nully0x.github.io/signet-sandbox/install.sh | sh</pre>
+          <pre class="code-block copyable"><span class="prompt">$ </span><code class="cmd-text">curl -fsSL https://nully0x.github.io/signet-sandbox/install.sh | sh</code><button class="code-copy" type="button" aria-label="Copy the install command">copy</button></pre>
           <p class="panel-note"><span class="tag">LINUX · MACOS</span> x86_64 and arm64. Re-run the same line to upgrade.</p>
           <ul class="requirements">
             <li><span class="req-dot" aria-hidden="true"></span> Docker daemon, running: Docker Desktop, colima, or OrbStack</li>
@@ -91,7 +91,7 @@
                 <strong>Bootstrap the local stack</strong>
                 <p>Prepares the local platform, starts the API, and writes a local identity. Pass the host at this step when other machines must reach the endpoints.</p>
                 <pre class="code-block compact"><span class="prompt">$ </span>signet bootstrap
-<span class="prompt">$ </span>signet bootstrap --host 192.168.100.2</pre>
+<span class="prompt">$ </span>signet bootstrap --host &lt;host machine ip&gt;</pre>
               </div>
             </li>
             <li>
@@ -347,5 +347,6 @@
         <a href="docs.html">Docs</a>
       </div>
     </footer>
+    <script src="script.js" defer></script>
   </body>
 </html>

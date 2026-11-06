@@ -385,6 +385,46 @@ h1 span {
   user-select: none;
 }
 
+.code-block.copyable {
+  position: relative;
+  padding-right: 86px;
+  /* The install line is longer than narrow viewports: wrap it so the
+     whole command stays visible and the copy button stays reachable. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.code-copy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: #0c1013;
+  color: #6f8093;
+  font-family: inherit;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.code-copy:hover {
+  color: #cfd6dc;
+  border-color: #3a4a56;
+}
+
+.code-copy.copied {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.code-copy:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .panel-note {
   font-size: 11.5px;
   color: #6f8093;
