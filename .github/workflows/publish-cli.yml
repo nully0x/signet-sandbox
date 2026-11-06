@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release, e.g. v0.1.0 (empty: build artifacts only)"
+        description: "Version to release, e.g. v0.1.0 or 0.1.0 (empty: build artifacts only)"
         required: false
         type: string
 
@@ -104,8 +104,11 @@ jobs:
       - name: Create release and upload
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           VERSION: ${{ github.ref_type == 'tag' && github.ref_name || inputs.version }}
         run: |
+          # Normalize to the v-prefixed tag the installer and docs use.
+          VERSION="v${VERSION#v}"
           gh release view "$VERSION" >/dev/null 2>&1 \
             || gh release create "$VERSION" --title "signet $VERSION" --generate-notes
           gh release upload "$VERSION" dist/*.tar.gz dist/*.tar.gz.sha256 --clobber
