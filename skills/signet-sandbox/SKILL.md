@@ -103,8 +103,11 @@ signet delete my-env   # remove the record and free the ports
 signet ls              # list environments
 ```
 
-Components are fixed at create time. An edited config does not patch the
-running environment: `down` + `delete`, then `up` again.
+Lightning is the one component you can add to a live environment: call
+`environment.update` with the complete desired `lightning` array —
+existing names included, because an omitted name counts as a removal
+and is rejected. Add-only in v1: removals, ttl, and every other
+component still mean `down` + `delete`, then `up` again.
 
 Re-creating an environment under the same name always works — dead
 records are cleaned up automatically. Port capacity is finite (100

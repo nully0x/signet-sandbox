@@ -184,6 +184,24 @@
 grpc   https://localhost:21001
 p2p    localhost:21002</pre>
           <p>Each entry in the map carries <code>rest_url</code>, <code>grpc_url</code>, <code>tls_cert</code>, the <code>auth</code> object with a macaroon, <code>node_id</code>, and <code>node_uri</code>.</p>
+          <h3>Add a node while it runs</h3>
+          <p><code>environment.update</code> adds lightning instances to a live, ready environment without tearing it down. The <code>lightning</code> array is the complete desired set: include every instance that already exists, because omitting one is rejected as a removal. v1 is add-only — removals, ttl changes, and other components stay create-time decisions. New instances join the bundle's <code>lightning</code> map once their wallets are ready.</p>
+          <pre class="code-block"><span class="prompt">$ </span>curl -s -X POST localhost:8081/api/rpc \
+    -H 'content-type: application/json' \
+    -H "Authorization: Bearer $SIGNET_TOKEN" \
+    -d '{
+      "jsonrpc": "2.0", "id": 1,
+      "method": "environment.update",
+      "params": {
+        "id": "my-env",
+        "components": {
+          "lightning": [
+            { "name": "ln-alice", "implementation": "lnd" },
+            { "name": "ln-carol", "implementation": "lnd" }
+          ]
+        }
+      }
+    }'</pre>
           <h3>Authentication and TLS</h3>
           <p>The macaroon ships hex-encoded. REST clients send it as the <code>Grpc-Metadata-macaroon</code> header. gRPC clients send the macaroon and trust the certificate.</p>
           <p>The bundle's <code>tls_cert</code> is the CA, hex-encoded PEM. Decode it and pin it as a root. The served leaf chains to it and covers localhost, the internal service names, and the advertised host. Do not disable verification, because the environment exists to behave like the real thing.</p>

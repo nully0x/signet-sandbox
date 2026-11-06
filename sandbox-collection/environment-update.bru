@@ -1,0 +1,34 @@
+meta {
+  name: environment.update (add lightning)
+  type: http
+  seq: 11
+}
+
+post {
+  url: {{rpc_url}}
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  Authorization: Bearer {{bearer}}
+}
+
+body:json {
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "environment.update",
+    "params": {
+      "id": "{{env_id}}",
+      "components": {
+        "lightning": [
+          { "name": "ln-alice", "implementation": "lnd" },
+          { "name": "ln-bob", "implementation": "lnd" },
+          { "name": "ln-carol", "implementation": "lnd" }
+        ]
+      }
+    }
+  }
+}

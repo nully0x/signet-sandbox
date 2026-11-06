@@ -8,18 +8,15 @@ token minted from the terminal.
 1. Bruno → Open Collection → select this directory.
 2. Pick the `local` environment. Testing from another machine? Change
    `rpc_url` and `api_base` to your dev box address, e.g.
-   `http://100.86.230.10:8081` (tailscale) or the LAN IP.
+   `http://100.86.190.9:8081` (tailscale) or the LAN IP.
 3. Mint a bearer token on the dev box — one command, prints only the
    token:
 
    ```bash
-   signet token            # local cluster: uses ~/.signet/config.toml
-   just get-token          # dev-api loop: uses the dev NIP-98 key from .env
+   just get-token
    ```
 
-   Use the profile identity (`signet token`) for tokens that must own the
-   environments the CLI creates; use the dev key (`just get-token`) for
-   the `just dev-api` loop.
+   It signs `token.create` with the dev NIP-98 key from `.env`.
    No just? `cargo run -p signet-cli -- token` does the same. The
    manual curl flow lives in `docs/DEV.md`.
 
@@ -43,14 +40,11 @@ token minted from the terminal.
 - **environment.list** returns the caller's environments: id, name,
   status, created/expires timestamps.
 - **environment.create (lightning)** provisions two named LND instances
-  (`ln-alice`, `ln-bob`). The request also sets `indexer: true`, though
-  Lightning does not require electrs — the indexer is an independent,
-  opt-in component. The bundle's `lightning` field is a map keyed by
-  instance name. Each entry carries `implementation`, `node_id`,
-  `node_uri`, `rest_url`, `grpc_url`, `tls_cert`, and
-  `auth {type: "macaroon", value}`, and the field stays absent until the
-  instances are ready. Nodes come up unconnected: peer them with
-  `node_uri`, then open channels yourself via `lncli` inside the pods.
+  (`ln-alice`, `ln-bob`) plus the indexer they require. The bundle's
+  `lightning` field is a map keyed by instance name — each entry carries
+  `implementation`, `rest_url`, and `auth {type: "macaroon", value}` —
+  and stays absent until the instances are ready. Nodes come up
+  unconnected: open channels yourself via `lncli` inside the pods.
   Only `lnd` is supported in v1; other implementations are rejected
   with `-32602`.
 - Failures are JSON-RPC errors inside HTTP 200: check the body's `error`

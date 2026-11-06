@@ -108,6 +108,33 @@ JSON-RPC error objects, never HTTP status semantics: `-32002`
 unauthenticated, `-32004` not the owner, `-32602` invalid params (unknown
 version key, non-positive or overflowing `ttl_secs`).
 
+Add lightning instances to a running environment with `environment.update`.
+The `lightning` array is the complete desired set — include every existing
+instance, because omitting one is rejected as a removal (`-32602`). v1 is
+add-only: removals, ttl changes, and other components stay create-time
+decisions. Owner-only, and the environment must be `ready`:
+
+```bash
+curl -s -X POST localhost:8081/api/rpc \
+    -H 'content-type: application/json' -H "$HDR" \
+    -d '{
+      "jsonrpc": "2.0", "id": 1,
+      "method": "environment.update",
+      "params": {
+        "id": "my-env",
+        "components": {
+          "lightning": [
+            { "name": "ln-alice", "implementation": "lnd" },
+            { "name": "ln-carol", "implementation": "lnd" }
+          ]
+        }
+      }
+    }'
+```
+
+The response is the connection bundle; new instances appear in its
+`lightning` map once their wallets come up (poll with `environment.get`).
+
 ### API tokens (Bruno, curl, CI)
 
 The API must be running before you mint: `just dev-up` (postgres), then
