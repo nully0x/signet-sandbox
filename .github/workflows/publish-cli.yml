@@ -1,12 +1,22 @@
 # Builds the `signet` CLI for distribution and attaches the release
-# archives to the GitHub release. scripts/install.sh and `signet update`
-# download from there. No windows build: the codebase is unix-only.
+# archives to the GitHub release. scripts/install.sh and the site copy
+# of it download from there. No windows build: the codebase is unix-only.
+#
+# Release paths:
+#   tag push v*            release named after the tag
+#   dispatch + version     release created at that version tag
+#   dispatch, no version   artifacts only (smoke test)
 name: publish-cli
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. v0.1.0 (empty: build artifacts only)"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -40,14 +50,17 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      # Tag pushes keep the v-prefixed ref name: it flows into the asset
-      # name and must match what scripts/install.sh and `signet update`
-      # look up. Non-tag runs produce artifacts only, no release.
+      # The version flows into the asset name and must match what
+      # scripts/install.sh looks up: a v-prefixed tag on release runs.
       - name: Resolve version
         id: meta
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             echo "version=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          elif [ -n "$DISPATCH_VERSION" ]; then
+            echo "version=$DISPATCH_VERSION" >> "$GITHUB_OUTPUT"
           else
             echo "version=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           fi
@@ -78,7 +91,7 @@ jobs:
 
   release:
     needs: build
-    if: github.ref_type == 'tag'
+    if: github.ref_type == 'tag' || inputs.version != ''
     runs-on: ubuntu-latest
     steps:
       - name: Download archives
@@ -91,6 +104,8 @@ jobs:
       - name: Create release and upload
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || inputs.version }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --title "signet $GITHUB_REF_NAME" --generate-notes
-          gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.tar.gz.sha256
+          gh release view "$VERSION" >/dev/null 2>&1 \
+            || gh release create "$VERSION" --title "signet $VERSION" --generate-notes
+          gh release upload "$VERSION" dist/*.tar.gz dist/*.tar.gz.sha256 --clobber
