@@ -52,18 +52,32 @@ jobs:
 
       # The version flows into the asset name and must match what
       # scripts/install.sh looks up: a v-prefixed tag on release runs.
+      # A mistyped version (v0.1,0) must abort here, before four builds
+      # run and before anything reaches a release.
       - name: Resolve version
         id: meta
         env:
           DISPATCH_VERSION: ${{ inputs.version }}
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then
-            echo "version=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            version=$GITHUB_REF_NAME
           elif [ -n "$DISPATCH_VERSION" ]; then
-            echo "version=$DISPATCH_VERSION" >> "$GITHUB_OUTPUT"
+            version=$DISPATCH_VERSION
           else
-            echo "version=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+            version="sha-${GITHUB_SHA::7}"
           fi
+          # Accept 0.1.0 or v0.1.0; everything becomes v-prefixed, which
+          # is the shape install.sh and the site docs publish.
+          if [ "$version" != "${version#sha-}" ]; then
+            :
+          else
+            version="v${version#v}"
+            if ! echo "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+].+)?$'; then
+              echo "::error::version '$DISPATCH_VERSION' is not vX.Y.Z (example: v0.1.0)"
+              exit 1
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Build
         run: cargo build --release -p signet-cli --target ${{ matrix.target }}
