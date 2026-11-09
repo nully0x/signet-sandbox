@@ -115,4 +115,8 @@ export const api = {
   delete: (id: string) => call<{ deleted: boolean }>('environment.delete', { id }),
   fund: (id: string, address: string, amount_sat: number) =>
     call<{ txid: string }>('environment.faucet', { id, address, amount_sat }),
+  // The lightning array is the complete desired set: existing instances
+  // must be included or the API rejects the call as a removal.
+  update: (id: string, lightning: { name: string; implementation: string }[]) =>
+    call<Bundle>('environment.update', { id, components: { lightning } }),
 }

@@ -20,6 +20,11 @@
   let fundError = $state('')
   let fundTxid = $state('')
 
+  let lnName = $state('')
+  let lnBusy = $state(false)
+  let lnError = $state('')
+  let pendingNode = $state('')
+
   const canStop = $derived(bundle?.status === 'ready')
   const canStart = $derived(bundle?.status === 'stopped')
   const canDestroy = $derived(
@@ -58,10 +63,20 @@
   let pollTimer: ReturnType<typeof setInterval> | undefined = $state()
   $effect(() => {
     const status = bundle?.status
+    // Keep redrawing while work is in flight: provisioning, or a newly
+    // added lightning node whose wallet has not surfaced in the bundle.
+    const waiting =
+      pendingNode !== '' && !(pendingNode in (bundle?.lightning ?? {}))
     clearInterval(pollTimer)
-    if (status === 'provisioning' || status === 'starting') {
+    if (status === 'provisioning' || status === 'starting' || waiting) {
       pollTimer = setInterval(load, 3000)
       return () => clearInterval(pollTimer)
+    }
+  })
+
+  $effect(() => {
+    if (pendingNode !== '' && bundle?.lightning?.[pendingNode]) {
+      pendingNode = ''
     }
   })
 
@@ -134,6 +149,43 @@
   }
 
   const instances = $derived(Object.entries(bundle?.lightning ?? {}))
+
+  function dnsLabelOk(name: string): boolean {
+    // Instance names become k8s resource names: dns-1123 labels.
+    return /^[a-z0-9][a-z0-9-]{0,62}$/.test(name)
+  }
+
+  async function addLightning(event: SubmitEvent) {
+    event.preventDefault()
+    const name = lnName.trim()
+    if (lnBusy || !name || !bundle) return
+    if (!dnsLabelOk(name)) {
+      lnError = 'name must be a dns label: lowercase letters, digits, hyphens; max 63 chars'
+      return
+    }
+    if (instances.some(([existing]) => existing === name)) {
+      lnError = `node “${name}” already exists`
+      return
+    }
+    lnBusy = true
+    lnError = ''
+    try {
+      const desired = [
+        ...instances.map(([existing, ln]) => ({
+          name: existing,
+          implementation: ln.implementation,
+        })),
+        { name, implementation: 'lnd' },
+      ]
+      bundle = await api.update(envRef, desired)
+      pendingNode = name
+      lnName = ''
+    } catch (e) {
+      lnError = e instanceof Error ? e.message : 'update failed'
+    } finally {
+      lnBusy = false
+    }
+  }
 </script>
 
 {#if loading && !bundle}
@@ -248,8 +300,29 @@
 
   <section class="panel">
     <h2 class="panel-title">lightning</h2>
-    {#if instances.length === 0}
-      <p class="note">no lightning instances on this sheet — add one with <code>environment.update</code></p>
+    {#if instances.length === 0 && bundle.status !== 'ready'}
+      <p class="note">no lightning instances on this sheet — the environment must be ready to add one</p>
+    {/if}
+    {#if bundle.status === 'ready'}
+      <form class="ln-grid" onsubmit={addLightning}>
+        <label class="field">
+          <span>new node name</span>
+          <input class="input" bind:value={lnName} placeholder="ln-carol" spellcheck="false" />
+        </label>
+        <label class="field">
+          <span>implementation</span>
+          <input class="input" value="lnd" disabled />
+        </label>
+        <button class="btn btn--primary" type="submit" disabled={lnBusy || !lnName.trim()}>
+          {lnBusy ? 'adding…' : 'add node' }
+        </button>
+      </form>
+      {#if lnError}
+        <p class="error-text">{lnError}</p>
+      {/if}
+      {#if pendingNode}
+        <p class="note">waiting for “{pendingNode}” — its card appears here when the wallet is ready</p>
+      {/if}
     {/if}
     {#each instances as [name, ln] (name)}
       <div class="instance">
@@ -304,6 +377,16 @@
   .fund-grid .field {
     margin-bottom: 0;
   }
+  .ln-grid {
+    display: grid;
+    grid-template-columns: 1fr 10rem auto;
+    gap: 0.9rem;
+    align-items: end;
+    margin-bottom: 0.4rem;
+  }
+  .ln-grid .field {
+    margin-bottom: 0;
+  }
   .instance {
     border: 1px solid var(--line);
     background: var(--panel-deep);
@@ -323,8 +406,5 @@
     color: var(--accent);
     font-size: 0.65rem;
     letter-spacing: 0.16em;
-  }
-  .note code {
-    color: var(--accent);
   }
 </style>
