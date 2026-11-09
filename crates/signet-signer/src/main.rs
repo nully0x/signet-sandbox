@@ -69,10 +69,14 @@ fn keygen() -> anyhow::Result<()> {
 async fn ensure_wallet(client: &Client, wallet: &str) -> anyhow::Result<ScriptBuf> {
     let wallet_client = client.wallet(wallet);
     if wallet_client.get_wallet_info().await.is_err() {
-        client
-            .create_wallet(wallet)
-            .await
-            .with_context(|| format!("creating wallet {wallet}"))?;
+        // A persisted wallet survives a pod restart, but bitcoind starts
+        // with no wallets loaded: load before creating a fresh one.
+        if client.load_wallet(wallet).await.is_err() {
+            client
+                .create_wallet(wallet)
+                .await
+                .with_context(|| format!("creating wallet {wallet}"))?;
+        }
     }
     let address = wallet_client.get_new_address("coinbase").await?;
     let info = wallet_client.get_address_info(&address).await?;
