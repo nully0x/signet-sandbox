@@ -1,23 +1,28 @@
 # Signet Sandbox
 
-Isolated, per-team Bitcoin signet environments, provisioned through a
-JSON-RPC API. Every environment gets its own chain: bitcoind in signet mode,
-a custom BIP325 block signer driven by a per-environment key, and any of
-electrs, a mempool explorer, a faucet, and LND, all in their own Kubernetes
-namespace. One call returns a connection bundle. A `ttl` deletes the
-environment when its time is up. Self-hosted, MIT licensed.
+Isolated Bitcoin signet environments, provisioned through a JSON-RPC API and
+the `signet` CLI. Every environment gets its own chain: bitcoind in signet
+mode, a custom BIP325 block signer driven by a per-environment key, and any
+of electrs, a mempool explorer, a faucet, and lightning nodes (LND today,
+more implementations planned), all in their own Kubernetes namespace. One
+call returns a connection bundle. Lightning nodes can be added while the
+environment runs, and a `ttl` deletes it when its time is up. An embedded
+dashboard shows every service. Self-hosted, MIT licensed.
 
 ## Why
 
-Bitcoin teams have no easy way to stand up their own Bitcoin test
+Bitcoin developers have no easy way to stand up their own Bitcoin test
 environment. Regtest is single-node and does not exercise real P2P or
 mempool behavior. Public testnet is shared, unreliable, and faucet-starved.
 Standing up a private signet correctly — node, signer, indexer, explorer,
 faucet, wired together and kept running — is enough operational work that
-teams skip it and integration-test against mainnet with real funds instead.
+most skip it and integration-test against mainnet with real funds instead.
 
 Signet Sandbox makes that a one-call provision: configuration in, connection
-bundle out, `ttl`-based teardown when you are done.
+bundle out, `ttl`-based teardown when you are done. The CLI bootstraps the
+whole local stack — cluster, platform services, identity — and the embedded
+dashboard shows every service of every environment. Need another lightning
+node mid-test? Add it to the running environment and keep the chain.
 
 ## Quick start
 
@@ -56,7 +61,8 @@ environment and derives the signet challenge from it, so no two environments
 mine the same chain. The signer premines 101 blocks and then follows the block
 policy. Destroying an environment deletes the namespace. Stop and start scale
 workloads to zero while the persistent volumes keep the chain, and a reaper
-enforces the `ttl`.
+enforces the `ttl`. Lightning instances can be added after create through
+`environment.update`; every other component is a create-time decision.
 
 ## Documentation
 
@@ -69,7 +75,8 @@ enforces the `ttl`.
 
 Shipped: NIP-98 and token auth, per-environment provisioning, faucet, electrs,
 explorer (gateway subdomains on DNS hosts, per-env ports on IP/localhost
-hosts), LND instances with peering, TTL reaper, CLI, and the embedded dashboard.
+hosts), LND instances with peering, adding lightning instances to a live
+environment (`environment.update`), TTL reaper, CLI, and the embedded dashboard.
 
 Not built yet: scenario controls (reorgs, stuck fees, RBF), TTL updates,
 snapshot and restore, a Helm chart, a CI action, and a hosted tier.
