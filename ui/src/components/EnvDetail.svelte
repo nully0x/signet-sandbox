@@ -1,13 +1,20 @@
 <script lang="ts">
   import { api, type Bundle, RpcError, UNAUTHENTICATED } from '../lib/rpc'
-  import Copyable from './Copyable.svelte'
-  import StatusPill from './StatusPill.svelte'
+  import { Badge, Button, Card, Copyable, EmptyState, Field, Input, Spinner, Tabs, statusTone } from '../lib/ui'
 
-  let { envRef, back }: { envRef: string; back(): void } = $props()
+  let { envRef, back, touch }: { envRef: string; back(): void; touch(): void } = $props()
 
   let bundle = $state<Bundle | null>(null)
   let error = $state('')
   let loading = $state(false)
+
+  let tab = $state('overview')
+  const TABS = [
+    { id: 'overview', label: 'overview' },
+    { id: 'connect', label: 'connect' },
+    { id: 'chain', label: 'chain' },
+    { id: 'lightning', label: 'lightning' },
+  ]
 
   let actionBusy = $state(false)
   let confirmName = $state('')
@@ -36,11 +43,18 @@
   const destroyArmed = $derived(confirmingDestroy && confirmName === envRef)
   const hasFaucet = $derived(bundle?.faucet_url !== null && bundle?.faucet_url !== undefined)
 
+  // Status seen in the previous bundle; flips trigger a rail touch.
+  let lastStatus = ''
+
   async function load() {
     loading = true
     error = ''
     try {
       bundle = await api.get(envRef)
+      if (bundle.status !== lastStatus) {
+        lastStatus = bundle.status
+        touch()
+      }
     } catch (e) {
       if (e instanceof RpcError && e.code === UNAUTHENTICATED) {
         back()
@@ -52,23 +66,35 @@
     }
   }
 
-  // Drafting-table behaviour: while the machine works, the sheet redraws
+  // Drafting-table behaviour: while the machine works, the view redraws
   // itself — poll until the environment settles.
+  let pollTimer: ReturnType<typeof setInterval> | undefined
+
+  // A node exec-checked mid-boot is omitted from the bundle; keep
+  // polling for this window after ready so late nodes surface as cards.
+  const READY_GRACE_MS = 15000
+  let readyAt = 0
+
   $effect(() => {
     bundle = null
     load()
     return () => clearInterval(pollTimer)
   })
 
-  let pollTimer: ReturnType<typeof setInterval> | undefined = $state()
   $effect(() => {
     const status = bundle?.status
-    // Keep redrawing while work is in flight: provisioning, or a newly
-    // added lightning node whose wallet has not surfaced in the bundle.
-    const waiting =
-      pendingNode !== '' && !(pendingNode in (bundle?.lightning ?? {}))
+    // Keep redrawing while work is in flight: provisioning, a newly
+    // added lightning node whose wallet has not surfaced, or the grace
+    // window right after ready.
+    const waiting = pendingNode !== '' && !(pendingNode in (bundle?.lightning ?? {}))
+    if (status === 'ready') {
+      if (readyAt === 0) readyAt = Date.now()
+    } else {
+      readyAt = 0
+    }
+    const inGrace = readyAt !== 0 && Date.now() - readyAt < READY_GRACE_MS
     clearInterval(pollTimer)
-    if (status === 'provisioning' || status === 'starting' || waiting) {
+    if (status === 'provisioning' || status === 'starting' || waiting || inGrace) {
       pollTimer = setInterval(load, 3000)
       return () => clearInterval(pollTimer)
     }
@@ -89,9 +115,11 @@
       else if (kind === 'start') await api.start(envRef)
       else {
         await api.destroy(envRef)
+        touch()
         back()
         return
       }
+      touch()
       await load()
     } catch (e) {
       if (e instanceof RpcError && e.code === UNAUTHENTICATED) {
@@ -119,6 +147,7 @@
     error = ''
     try {
       await api.delete(envRef)
+      touch()
       back()
     } catch (e) {
       if (e instanceof RpcError && e.code === UNAUTHENTICATED) {
@@ -189,167 +218,211 @@
 </script>
 
 {#if loading && !bundle}
-  <p class="note">loading {envRef} …</p>
+  <p class="note loading"><Spinner size="0.8rem" /> loading {envRef} …</p>
 {:else if error && !bundle}
-  <p class="error-text">{error} <button class="btn" onclick={back}>back</button></p>
+  <p class="error-text">{error} <Button onclick={back}>back</Button></p>
 {:else if bundle}
   <header>
-    <button class="btn" onclick={back}>← registry</button>
+    <Button onclick={back}>← registry</Button>
     <h1>{envRef}</h1>
-    <StatusPill status={bundle.status} />
+    <Badge tone={statusTone(bundle.status)} dot={statusTone(bundle.status) === 'busy'}>
+      {bundle.status}
+    </Badge>
   </header>
 
-  <div class="panel actions">
-    <button class="btn" onclick={() => lifecycle('stop')} disabled={!canStop || actionBusy}>stop</button>
-    <button class="btn" onclick={() => lifecycle('start')} disabled={!canStart || actionBusy}>start</button>
-    {#if canDestroy}
-      <button class="btn btn--danger" onclick={toggleConfirmDestroy} disabled={actionBusy}>
-        {confirmingDestroy ? 'cancel' : 'destroy'}
-      </button>
-    {/if}
-    {#if confirmingDestroy && canDestroy}
-      <span class="confirm-cluster">
-        <span class="note">type “{envRef}” to confirm destruction</span>
-        <input class="input confirm-input" bind:value={confirmName} placeholder={envRef} spellcheck="false" />
-        <button
-          class="btn btn--danger confirm"
-          onclick={() => lifecycle('destroy')}
-          disabled={!destroyArmed || actionBusy}
-        >
-          confirm destroy
-        </button>
-      </span>
-    {/if}
-    {#if canDelete}
-      <button class="btn btn--danger" onclick={toggleConfirmDelete} disabled={actionBusy}>
-        {confirmingDelete ? 'cancel' : 'delete record'}
-      </button>
-    {/if}
-    {#if confirmingDelete && canDelete}
-      <span class="confirm-cluster">
-        <span class="note">removes the record; the cluster is already gone</span>
-        <button class="btn btn--danger confirm" onclick={purge} disabled={actionBusy}>
-          confirm delete
-        </button>
-      </span>
-    {/if}
-    {#if error}
-      <span class="error-text">{error}</span>
-    {/if}
-  </div>
+  <Tabs tabs={TABS} active={tab} onchange={(id) => (tab = id)} />
 
-  <section class="panel">
-    <h2 class="panel-title">endpoints</h2>
-    <Copyable label="rpc url" value={bundle.rpc_url} />
-    {#if bundle.rpc_auth}
-      <Copyable label="rpc auth" value={bundle.rpc_auth} secret />
-    {/if}
-    {#if bundle.indexer_endpoint}
-      <Copyable label="electrum" value={bundle.indexer_endpoint} />
-    {/if}
-    {#if bundle.explorer_url}
-      <Copyable label="explorer" value={bundle.explorer_url} href={bundle.explorer_url} />
-    {/if}
-    {#if bundle.faucet_url}
-      <Copyable label="faucet" value={bundle.faucet_url} />
-    {/if}
-  </section>
+  {#if tab === 'overview'}
+    <div class="tabpanel" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
+      <Card title="lifecycle">
+        <div class="actions">
+          <Button onclick={() => lifecycle('stop')} disabled={!canStop || actionBusy}>stop</Button>
+          <Button onclick={() => lifecycle('start')} disabled={!canStart || actionBusy}>start</Button>
+          {#if canDestroy}
+            <Button variant="danger" onclick={toggleConfirmDestroy} disabled={actionBusy}>
+              {confirmingDestroy ? 'cancel' : 'destroy'}
+            </Button>
+          {/if}
+          {#if confirmingDestroy && canDestroy}
+            <span class="confirm-cluster">
+              <span class="note">type “{envRef}” to confirm destruction</span>
+              <Input bind:value={confirmName} placeholder={envRef} spellcheck="false" />
+              <Button
+                variant="danger"
+                filled={destroyArmed}
+                onclick={() => lifecycle('destroy')}
+                disabled={!destroyArmed || actionBusy}
+              >
+                confirm destroy
+              </Button>
+            </span>
+          {/if}
+          {#if canDelete}
+            <Button variant="danger" onclick={toggleConfirmDelete} disabled={actionBusy}>
+              {confirmingDelete ? 'cancel' : 'delete record'}
+            </Button>
+          {/if}
+          {#if confirmingDelete && canDelete}
+            <span class="confirm-cluster">
+              <span class="note">removes the record; the cluster is already gone</span>
+              <Button variant="danger" filled onclick={purge} disabled={actionBusy}>
+                confirm delete
+              </Button>
+            </span>
+          {/if}
+          {#if error}
+            <span class="error-text">{error}</span>
+          {/if}
+        </div>
+        {#if bundle.status === 'provisioning' || bundle.status === 'starting'}
+          <p class="note">the machine is working — this view redraws until the environment settles</p>
+        {/if}
+        {#if bundle.expires_at}
+          <div class="kv">
+            <span>expires</span>
+            <code class="tnum">{new Date(bundle.expires_at).toLocaleString()}</code>
+          </div>
+        {/if}
+      </Card>
 
-  {#if hasFaucet && bundle.status === 'ready'}
-    <form class="panel" onsubmit={fund}>
-      <h2 class="panel-title">faucet — mint signet coin</h2>
-      <div class="fund-grid">
-        <label class="field">
-          <span>address</span>
-          <input class="input" bind:value={fundAddress} placeholder="sb1q…" spellcheck="false" />
-        </label>
-        <label class="field">
-          <span>amount (sats)</span>
-          <input class="input" type="number" min="1" bind:value={fundAmount} placeholder="1000000" />
-        </label>
-        <button class="btn btn--primary" type="submit" disabled={fundBusy || !fundAddress || !fundAmount}>
-          {fundBusy ? 'minting…' : 'fund'}
-        </button>
-      </div>
-      {#if fundError}
-        <p class="error-text">{fundError}</p>
+      {#if bundle.versions && Object.keys(bundle.versions).length > 0}
+        <Card title="versions">
+          {#each Object.entries(bundle.versions) as [component, tag] (component)}
+            <div class="kv">
+              <span>{component}</span>
+              <code>{tag}</code>
+            </div>
+          {/each}
+        </Card>
       {/if}
-      {#if fundTxid}
-        <Copyable label="txid" value={fundTxid} />
+    </div>
+  {:else if tab === 'connect'}
+    <div class="tabpanel" id="panel-connect" role="tabpanel" aria-labelledby="tab-connect">
+      <Card title="api">
+        <Copyable label="rpc url" value={bundle.rpc_url} />
+        {#if bundle.rpc_auth}
+          <Copyable label="rpc auth" value={bundle.rpc_auth} secret />
+        {/if}
+        {#if bundle.indexer_endpoint}
+          <Copyable label="electrum" value={bundle.indexer_endpoint} />
+        {/if}
+        {#if bundle.explorer_url}
+          <Copyable label="explorer" value={bundle.explorer_url} href={bundle.explorer_url} />
+        {/if}
+        {#if bundle.faucet_url}
+          <Copyable label="faucet" value={bundle.faucet_url} />
+        {/if}
+      </Card>
+    </div>
+  {:else if tab === 'chain'}
+    <div class="tabpanel" id="panel-chain" role="tabpanel" aria-labelledby="tab-chain">
+      <Card title="chain">
+        <Copyable label="challenge" value={bundle.signet_challenge} />
+        <Copyable label="block policy" value={bundle.block_policy} />
+      </Card>
+
+      {#if hasFaucet && bundle.status === 'ready'}
+        <Card title="faucet — mint signet coin">
+          <form class="fund-grid" onsubmit={fund}>
+            <Field label="address">
+              <Input bind:value={fundAddress} placeholder="sb1q…" spellcheck="false" />
+            </Field>
+            <Field label="amount (sats)">
+              <Input type="number" min="1" bind:value={fundAmount} placeholder="1000000" />
+            </Field>
+            <Button variant="primary" type="submit" disabled={fundBusy || !fundAddress || !fundAmount}>
+              {fundBusy ? 'minting…' : 'fund'}
+            </Button>
+          </form>
+          {#if fundError}
+            <p class="error-text">{fundError}</p>
+          {/if}
+          {#if fundTxid}
+            <Copyable label="txid" value={fundTxid} />
+          {/if}
+        </Card>
       {/if}
-    </form>
+    </div>
+  {:else}
+    <div class="tabpanel" id="panel-lightning" role="tabpanel" aria-labelledby="tab-lightning">
+      {#if bundle.status === 'ready'}
+        <Card title="add node">
+          <form class="ln-grid" onsubmit={addLightning}>
+            <Field label="new node name">
+              <Input bind:value={lnName} placeholder="ln-carol" spellcheck="false" />
+            </Field>
+            <Field label="implementation">
+              <Input value="lnd" disabled />
+            </Field>
+            <Button variant="primary" type="submit" disabled={lnBusy || !lnName.trim()}>
+              {lnBusy ? 'adding…' : 'add node'}
+            </Button>
+          </form>
+          {#if lnError}
+            <p class="error-text">{lnError}</p>
+          {/if}
+          {#if pendingNode}
+            <p class="note">waiting for “{pendingNode}” — its card appears here when the wallet is ready</p>
+          {/if}
+        </Card>
+      {/if}
+
+      {#if instances.length === 0}
+        <EmptyState>
+          <p>
+            {bundle.status === 'ready'
+              ? 'no lightning instances yet — add one above'
+              : 'no lightning instances on this environment — it must be ready to add one'}
+          </p>
+        </EmptyState>
+      {:else}
+        <div class="nodes">
+          {#each instances as [name, ln] (name)}
+            <div class="node">
+              <header>
+                <h3>{name}</h3>
+                <Badge tone="accent">{ln.implementation}</Badge>
+              </header>
+              <Copyable label="node id" value={ln.node_id} />
+              <Copyable label="peer uri" value={ln.node_uri} />
+              <Copyable label="rest url" value={ln.rest_url} />
+              {#if ln.grpc_url}
+                <Copyable label="grpc url" value={ln.grpc_url} />
+              {/if}
+              {#if ln.auth.type === 'rune'}
+                <Copyable label="rune" value={ln.auth.value} secret />
+              {:else}
+                <Copyable label="macaroon" value={ln.auth.value} secret />
+              {/if}
+              <Copyable label="tls ca (hex)" value={ln.tls_cert} secret />
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
   {/if}
-
-  <section class="panel">
-    <h2 class="panel-title">chain</h2>
-    <Copyable label="challenge" value={bundle.signet_challenge} />
-    <Copyable label="block policy" value={bundle.block_policy} />
-    {#if bundle.expires_at}
-      <Copyable label="expires" value={new Date(bundle.expires_at).toLocaleString()} />
-    {/if}
-  </section>
-
-  {#if bundle.versions}
-    <section class="panel">
-      <h2 class="panel-title">versions</h2>
-      {#each Object.entries(bundle.versions) as [component, tag] (component)}
-        <Copyable label={component} value={tag} />
-      {/each}
-    </section>
-  {/if}
-
-  <section class="panel">
-    <h2 class="panel-title">lightning</h2>
-    {#if instances.length === 0 && bundle.status !== 'ready'}
-      <p class="note">no lightning instances on this sheet — the environment must be ready to add one</p>
-    {/if}
-    {#if bundle.status === 'ready'}
-      <form class="ln-grid" onsubmit={addLightning}>
-        <label class="field">
-          <span>new node name</span>
-          <input class="input" bind:value={lnName} placeholder="ln-carol" spellcheck="false" />
-        </label>
-        <label class="field">
-          <span>implementation</span>
-          <input class="input" value="lnd" disabled />
-        </label>
-        <button class="btn btn--primary" type="submit" disabled={lnBusy || !lnName.trim()}>
-          {lnBusy ? 'adding…' : 'add node' }
-        </button>
-      </form>
-      {#if lnError}
-        <p class="error-text">{lnError}</p>
-      {/if}
-      {#if pendingNode}
-        <p class="note">waiting for “{pendingNode}” — its card appears here when the wallet is ready</p>
-      {/if}
-    {/if}
-    {#each instances as [name, ln] (name)}
-      <div class="instance">
-        <h3>{name} <span class="impl">{ln.implementation}</span></h3>
-        <Copyable label="node id" value={ln.node_id} />
-        <Copyable label="peer uri" value={ln.node_uri} />
-        <Copyable label="rest url" value={ln.rest_url} />
-        <Copyable label="grpc url" value={ln.grpc_url} />
-        <Copyable label="macaroon" value={ln.auth.value} secret />
-        <Copyable label="tls ca (hex)" value={ln.tls_cert} secret />
-      </div>
-    {/each}
-  </section>
 {/if}
 
 <style>
+  .loading {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
   header {
     display: flex;
     align-items: center;
     gap: 1rem;
-    margin-bottom: 1.2rem;
+    margin-bottom: 1rem;
   }
   h1 {
-    font-size: 1.5rem;
+    font-size: 1.4rem;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     margin-right: auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .actions {
     display: flex;
@@ -362,49 +435,66 @@
     gap: 0.6rem;
     align-items: center;
     flex-wrap: wrap;
-    border-left: 1px solid var(--line-strong);
+    border-left: 2px solid var(--line-strong);
     padding-left: 0.9rem;
   }
-  .confirm-input {
+  .confirm-cluster :global(input) {
     width: 12rem;
   }
-  .fund-grid {
-    display: grid;
-    grid-template-columns: 1fr 10rem auto;
-    gap: 0.9rem;
-    align-items: end;
+  .kv {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    font-size: 0.8rem;
+    padding: 0.35rem 0;
+    border-bottom: 1px dotted var(--line);
   }
-  .fund-grid .field {
-    margin-bottom: 0;
+  .kv:last-child {
+    border-bottom: none;
   }
+  .kv span {
+    color: var(--dim);
+  }
+  .fund-grid,
   .ln-grid {
     display: grid;
     grid-template-columns: 1fr 10rem auto;
     gap: 0.9rem;
     align-items: end;
-    margin-bottom: 0.4rem;
   }
-  .ln-grid .field {
-    margin-bottom: 0;
+  .fund-grid :global(input),
+  .ln-grid :global(input) {
+    width: 100%;
   }
-  .instance {
+  .nodes {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(24rem, 1fr));
+    gap: 0.8rem;
+  }
+  .node {
     border: 1px solid var(--line);
     background: var(--panel-deep);
-    padding: 0.4rem 1rem 0.7rem;
-    margin: 0.6rem 0;
+    border-radius: var(--radius);
+    padding: 0.6rem 1rem 0.7rem;
   }
-  h3 {
-    font-size: 1rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    margin: 0.6rem 0 0.3rem;
+  .node header {
     display: flex;
     gap: 0.6rem;
     align-items: baseline;
+    margin: 0.4rem 0 0.3rem;
   }
-  .impl {
-    color: var(--accent);
-    font-size: 0.65rem;
-    letter-spacing: 0.16em;
+  .node h3 {
+    font-size: 1rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  @media (max-width: 760px) {
+    .fund-grid,
+    .ln-grid {
+      grid-template-columns: 1fr;
+    }
+    .nodes {
+      grid-template-columns: 1fr;
+    }
   }
 </style>

@@ -1,10 +1,10 @@
 <script lang="ts">
   import { api, clearToken, storedToken, tokenFromFragment, type EnvSummary, RpcError, UNAUTHENTICATED } from './lib/rpc'
+  import { Button, EmptyState } from './lib/ui'
   import TokenGate from './components/TokenGate.svelte'
-  import EnvList from './components/EnvList.svelte'
-  import EnvDetail from './components/EnvDetail.svelte'
-
+  import EnvRail from './components/EnvRail.svelte'
   import EnvCreate from './components/EnvCreate.svelte'
+  import EnvDetail from './components/EnvDetail.svelte'
 
   let envs = $state<EnvSummary[]>([])
   let loadError = $state('')
@@ -19,9 +19,8 @@
   }
   let authenticated = $state(fragment !== null || storedToken() !== '')
 
-  // Hash routing: `#/` is the list, `#/env/<name-or-id>` the detail view.
-  // Hash routing: `#/` is the registry, `#/new` the draft sheet, and
-  // `#/env/<name-or-id>` the detail view.
+  // Hash routing: `#/` is the shell (rail + empty pane), `#/new` the
+  // draft sheet, and `#/env/<name-or-id>` the detail pane.
   let route = $state(currentRoute())
 
   function currentRoute() {
@@ -60,92 +59,98 @@
     }
   }
 
+  // Detail-pane mutations and status flips call touch so the rail's
+  // registry copy never waits for the steady 10-second poll.
+  function touch() {
+    listVersion++
+  }
+
   function unlock() {
     authenticated = true
     listVersion++
   }
 
+  // The rail is always on screen, so the registry stays live: an
+  // immediate refresh plus a steady poll while the shell is mounted.
   $effect(() => {
-    if (authenticated && route.view === 'list') {
-      void listVersion
-      refresh()
-    }
+    if (!authenticated) return
+    void listVersion
+    refresh()
+    const timer = setInterval(refresh, 10000)
+    return () => clearInterval(timer)
   })
 </script>
 
-<div class="frame">
-  {#if !authenticated}
-    <TokenGate onAuth={unlock} />
-  {:else if route.view === 'new'}
-    <EnvCreate onCreated={openEnv} onCancel={backToList} />
-  {:else if route.view === 'env'}
-    <EnvDetail envRef={route.ref} back={backToList} />
-  {:else}
-    <header>
-      <p class="mark">signet <span class="sep">/</span> environments</p>
-      <div class="nav">
-        <button class="ghost" onclick={goNew}>new environment</button>
-        <button class="ghost" onclick={() => listVersion++} disabled={loadError !== ''}>
-          refresh
-        </button>
+{#if !authenticated}
+  <TokenGate onAuth={unlock} />
+{:else}
+  <div class="shell">
+    <aside class="rail">
+      <p class="mark">signet</p>
+      <div class="rail-actions">
+        <Button variant="ghost" onclick={goNew}>new environment</Button>
+        <Button variant="ghost" onclick={() => listVersion++}>refresh</Button>
       </div>
-    </header>
-    {#if loadError}
-      <p class="note error">{loadError}</p>
-    {:else}
-      <EnvList envs={envs} open={openEnv} />
-    {/if}
-    <footer>rpc surface <code>/api/rpc</code></footer>
-  {/if}
-</div>
+      <EnvRail {envs} activeRef={route.view === 'env' ? route.ref : ''} open={openEnv} />
+      {#if loadError}
+        <p class="error-text">{loadError}</p>
+      {/if}
+      <footer>rpc surface <code>/api/rpc</code></footer>
+    </aside>
+    <main class="pane">
+      {#if route.view === 'new'}
+        <EnvCreate onCreated={(name) => { touch(); openEnv(name) }} onCancel={backToList} />
+      {:else if route.view === 'env'}
+        {#key route.ref}
+          <EnvDetail envRef={route.ref} back={backToList} touch={touch} />
+        {/key}
+      {:else}
+        <div class="intro">
+          <EmptyState>
+            <p>select an environment from the rail,<br />or draft a new one.</p>
+            <Button variant="primary" onclick={goNew}>new environment</Button>
+          </EmptyState>
+        </div>
+      {/if}
+    </main>
+  </div>
+{/if}
 
 <style>
-  .frame {
-    max-width: 56rem;
-    margin: 0 auto;
-    padding: 2.5rem 1.5rem 4rem;
+  .shell {
+    display: grid;
+    grid-template-columns: 15rem 1fr;
+    min-height: 100vh;
   }
-  header {
+  .rail {
     display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    margin-bottom: 1.2rem;
+    flex-direction: column;
+    gap: 0.7rem;
+    border-right: 1px solid var(--line);
+    background: var(--panel-deep);
+    padding: 1.1rem 0.9rem;
+    position: sticky;
+    top: 0;
+    height: 100vh;
   }
   .mark {
+    margin: 0;
     font-size: 0.7rem;
     letter-spacing: 0.3em;
     text-transform: uppercase;
     color: var(--dim);
   }
-  .mark .sep {
-    color: var(--accent);
-  }
-  .nav {
+  .rail-actions {
     display: flex;
-    gap: 0.5rem;
+    flex-direction: column;
+    gap: 0.4rem;
   }
-  button.ghost {
-    font: inherit;
-    background: none;
-    border: 1px solid var(--line);
-    color: var(--dim);
-    padding: 0.3rem 0.7rem;
-    cursor: pointer;
-    font-size: 0.7rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-  button.ghost:hover:not(:disabled) {
-    color: var(--ink);
-    border-color: var(--dim);
-  }
-  button.ghost:disabled {
-    opacity: 0.4;
-    cursor: default;
+  .rail-actions > :global(button) {
+    width: 100%;
   }
   footer {
-    margin-top: 1.4rem;
-    color: var(--dim);
+    margin-top: 0.3rem;
+    color: var(--faint);
     font-size: 0.65rem;
     letter-spacing: 0.14em;
     text-transform: uppercase;
@@ -153,8 +158,28 @@
   footer code {
     color: var(--accent);
   }
-  .note.error {
-    color: var(--red);
-    font-size: 0.8rem;
+  .pane {
+    width: 100%;
+    max-width: 72rem;
+    margin: 0 auto;
+    padding: 2rem 2.5rem 4rem;
+  }
+  .intro {
+    max-width: 36rem;
+    margin: 3rem auto 0;
+  }
+  @media (max-width: 760px) {
+    .shell {
+      grid-template-columns: 1fr;
+    }
+    .rail {
+      position: static;
+      height: auto;
+      border-right: none;
+      border-bottom: 1px solid var(--line);
+    }
+    .pane {
+      padding: 1.5rem 1.2rem 3rem;
+    }
   }
 </style>

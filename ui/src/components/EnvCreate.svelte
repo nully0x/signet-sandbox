@@ -1,5 +1,6 @@
 <script lang="ts">
   import { api } from '../lib/rpc'
+  import { Button, Card, Field, Input } from '../lib/ui'
 
   let { onCreated, onCancel }: { onCreated(name: string): void; onCancel(): void } = $props()
 
@@ -9,6 +10,7 @@
   let faucet = $state(true)
   let wantIndexer = $state(false)
   let instances = $state<string[]>([])
+  let instanceImpls = $state<Record<string, 'lnd' | 'cln'>>({})
   let newInstance = $state('')
   let error = $state('')
   let submitting = $state(false)
@@ -39,11 +41,14 @@
     const candidate = newInstance.trim().toLowerCase()
     if (!DNS_LABEL.test(candidate) || instances.includes(candidate)) return
     instances = [...instances, candidate]
+    instanceImpls = { ...instanceImpls, [candidate]: 'lnd' }
     newInstance = ''
   }
 
   function removeInstance(target: string) {
     instances = instances.filter((n) => n !== target)
+    const { [target]: _removed, ...rest } = instanceImpls
+    instanceImpls = rest
   }
 
   async function submit(event: SubmitEvent) {
@@ -59,7 +64,10 @@
           indexer,
           faucet,
           explorer,
-          lightning: instances.map((n) => ({ name: n, implementation: 'lnd' })),
+          lightning: instances.map((n) => ({
+            name: n,
+            implementation: instanceImpls[n] ?? 'lnd',
+          })),
         },
       })
       onCreated(name.trim())
@@ -71,79 +79,78 @@
   }
 </script>
 
-<form class="panel" onsubmit={submit}>
-  <h2 class="panel-title">new environment — draft</h2>
+<form onsubmit={submit}>
+  <Card title="new environment — draft">
+    <Field label="name" for="f-name" hint="dns label: lowercase letters, digits, dashes">
+      <Input id="f-name" bind:value={name} placeholder="my-env" spellcheck="false" />
+    </Field>
 
-  <div class="field">
-    <label for="f-name">name</label>
-    <input id="f-name" class="input" bind:value={name} placeholder="my-env" spellcheck="false" />
-    <span class="hint">dns label: lowercase letters, digits, dashes</span>
-  </div>
+    <Field label="ttl" for="f-ttl" hint="seconds, minutes, hours, days — e.g. 45s, 20m, 6h, 2d; empty = no expiry">
+      <Input id="f-ttl" bind:value={ttl} placeholder="20m" spellcheck="false" />
+    </Field>
 
-  <div class="field">
-    <label for="f-ttl">ttl</label>
-    <input id="f-ttl" class="input" bind:value={ttl} placeholder="20m" spellcheck="false" />
-    <span class="hint">seconds, minutes, hours, days — e.g. 45s, 20m, 6h, 2d; empty = no expiry</span>
-  </div>
+    <Field label="components">
+      <label class="check"><input type="checkbox" bind:checked={wantIndexer} /> indexer (electrs)</label>
+      <label class="check"><input type="checkbox" bind:checked={faucet} /> faucet</label>
+      <label class="check"><input type="checkbox" bind:checked={explorer} /> explorer (mempool)</label>
+    </Field>
 
-  <div class="field">
-    <span class="field-label">components</span>
-    <label class="check"><input type="checkbox" bind:checked={wantIndexer} /> indexer (electrs)</label>
-    <label class="check"><input type="checkbox" bind:checked={faucet} /> faucet</label>
-    <label class="check"><input type="checkbox" bind:checked={explorer} /> explorer (mempool)</label>
-  </div>
-
-  <div class="field">
-    <label for="f-instance">lightning instances (lnd)</label>
-    <div class="add-row">
-      <input
-        id="f-instance"
-        class="input"
-        bind:value={newInstance}
-        placeholder="ln-alice"
-        spellcheck="false"
-      />
-      <button class="btn" type="button" onclick={addInstance} disabled={!DNS_LABEL.test(newInstance.trim().toLowerCase())}>
-        add
-      </button>
-    </div>
-    {#each instances as instance (instance)}
-      <div class="instance-row">
-        <span class="instance-name">{instance}</span>
-        <button class="btn" type="button" onclick={() => removeInstance(instance)}>remove</button>
+    <Field label="lightning instances" for="f-instance">
+      <div class="add-row">
+        <Input
+          id="f-instance"
+          bind:value={newInstance}
+          placeholder="ln-alice"
+          spellcheck="false"
+        />
+        <Button
+          onclick={addInstance}
+          disabled={!DNS_LABEL.test(newInstance.trim().toLowerCase())}
+        >
+          add
+        </Button>
       </div>
-    {/each}
-    {#if invalidInstances.length > 0}
-      <span class="error-text">invalid instance name: {invalidInstances.join(', ')}</span>
+      <div class="rows">
+        {#each instances as instance (instance)}
+          <div class="instance-row">
+            <span class="instance-name">{instance}</span>
+            <select
+              class="impl-select"
+              aria-label="implementation for {instance}"
+              bind:value={instanceImpls[instance]}
+            >
+              <option value="lnd">lnd</option>
+              <option value="cln">cln</option>
+            </select>
+            <Button onclick={() => removeInstance(instance)}>remove</Button>
+          </div>
+        {/each}
+        {#if invalidInstances.length > 0}
+          <span class="error-text">invalid instance name: {invalidInstances.join(', ')}</span>
+        {/if}
+      </div>
+    </Field>
+
+    {#if error}
+      <p class="error-text">{error}</p>
     {/if}
-  </div>
 
-  {#if error}
-    <p class="error-text">{error}</p>
-  {/if}
-
-  <div class="form-actions">
-    <button class="btn" type="button" onclick={onCancel} disabled={submitting}>cancel</button>
-    <button class="btn btn--primary" type="submit" disabled={!formValid || submitting}>
-      {submitting ? 'drafting…' : 'provision environment'}
-    </button>
-  </div>
+    <div class="form-actions">
+      <Button onclick={onCancel} disabled={submitting}>cancel</Button>
+      <Button variant="primary" type="submit" disabled={!formValid || submitting}>
+        {submitting ? 'drafting…' : 'provision environment'}
+      </Button>
+    </div>
+  </Card>
 </form>
 
 <style>
-  .form-actions {
-    display: flex;
-    gap: 0.6rem;
-    justify-content: flex-end;
-  }
   .check {
     display: flex;
     gap: 0.5rem;
     align-items: center;
     font-size: 0.8rem;
     color: var(--ink);
-    text-transform: none;
-    letter-spacing: 0;
   }
   .check input {
     accent-color: var(--accent);
@@ -155,16 +162,41 @@
     display: flex;
     gap: 0.5rem;
   }
+  .add-row :global(input) {
+    flex: 1;
+  }
+  .rows {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin-top: 0.4rem;
+  }
   .instance-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 0.5rem;
     border: 1px solid var(--line);
     background: var(--panel-deep);
+    border-radius: var(--radius);
     padding: 0.45rem 0.7rem;
     font-size: 0.8rem;
   }
+  .impl-select {
+    font: inherit;
+    font-size: 0.8rem;
+    background: var(--panel);
+    border: 1px solid var(--line-strong);
+    color: var(--ink);
+    border-radius: var(--radius);
+    padding: 0.2rem 0.4rem;
+  }
   .instance-name {
     color: var(--accent);
+  }
+  .form-actions {
+    display: flex;
+    gap: 0.6rem;
+    justify-content: flex-end;
   }
 </style>

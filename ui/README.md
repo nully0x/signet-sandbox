@@ -43,25 +43,37 @@ Every RPC call carries `Authorization: Bearer sgn_...`. The token lives in
 
 Hash routing keeps the app a single static file:
 
-- `#/` — environment list
+- `#/` — the shell: registry rail plus an empty pane
 - `#/new` — create form
 - `#/env/<name-or-id>` — detail view
 
-The detail view polls every three seconds while an environment is
-`provisioning` or `starting`, and renders copyable bundle fields, lifecycle
-actions (stop, start, destroy, delete), and the faucet form when the
-environment has a faucet.
+The shell polls the registry every ten seconds while mounted. The detail
+view polls every three seconds while an environment is `provisioning` or
+`starting`, then for a 15-second grace window after `ready` — a node
+exec-checked mid-boot is omitted from the bundle, and the grace poll lets
+it surface as a card without a manual reload. The detail view renders
+lifecycle actions (stop, start, destroy, delete), the connection bundle,
+the faucet form, and lightning node cards. Lifecycle actions and status
+transitions in the detail view refresh the rail immediately, so both
+surfaces stay in step without separate manual refreshes.
 
 ## Layout
 
-- `src/App.svelte` — routing, session, refresh
-- `src/components/EnvList.svelte` — registry table
+The app is a two-column shell: a persistent registry rail (brand, new and
+refresh actions, environment rows with live status badges, rpc footer) and
+a content pane. Below 760px the rail stacks on top and its rows become
+horizontally scrolling chips. Detail views render as tabs: overview,
+connect, chain, lightning.
+
+- `src/App.svelte` — shell (rail + pane), routing, session, registry polling
+- `src/components/EnvRail.svelte` — registry rail rows
 - `src/components/EnvCreate.svelte` — create form, TTL parsing, instance list
-- `src/components/EnvDetail.svelte` — bundle cards, lifecycle, faucet
+- `src/components/EnvDetail.svelte` — tabbed detail: overview, connect, chain, lightning
 - `src/components/TokenGate.svelte` — token entry
-- `src/components/Copyable.svelte` — field with clipboard fallback
 - `src/lib/rpc.ts` — JSON-RPC client and bundle types
-- `src/app.css` — design tokens and base styles
+- `src/lib/ui/` — design-system primitives (Button, Badge, Card, Field,
+  Input, Tabs, Spinner, EmptyState, Copyable) and the status-to-tone map
+- `src/app.css` — design tokens and base styles; components own their styles
 
 ## Check
 

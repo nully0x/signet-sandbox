@@ -1,5 +1,6 @@
 <script lang="ts">
   import { saveToken, api, RpcError, UNAUTHENTICATED } from '../lib/rpc'
+  import { Button, Card, Input } from '../lib/ui'
 
   let { onAuth }: { onAuth(): void } = $props()
 
@@ -32,20 +33,22 @@
 </script>
 
 <div class="gate">
-  <form onsubmit={submit} class="panel">
-    <p class="wordmark">signet sandbox</p>
-    <h1 class="title">access</h1>
-    <p class="hint">
-      paste an api token. in local mode the profile token lives in
-      <code>~/.signet/config.toml</code>.
-    </p>
-    <input class="input" type="password" placeholder="sgn_..." bind:value autocomplete="off" spellcheck="false" />
-    {#if error}
-      <p class="error-text">{error}</p>
-    {/if}
-    <button class="btn btn--primary" type="submit" disabled={checking}>
-      {checking ? 'checking…' : 'unlock'}
-    </button>
+  <form onsubmit={submit}>
+    <Card>
+      <p class="wordmark">signet sandbox</p>
+      <h1 class="title">access</h1>
+      <p class="hint">
+        paste an api token. in local mode the profile token lives in
+        <code>~/.signet/config.toml</code>.
+      </p>
+      <Input type="password" placeholder="sgn_..." bind:value autocomplete="off" spellcheck="false" />
+      {#if error}
+        <p class="error-text">{error}</p>
+      {/if}
+      <Button variant="primary" type="submit" disabled={checking}>
+        {checking ? 'checking…' : 'unlock'}
+      </Button>
+    </Card>
   </form>
 </div>
 
@@ -57,9 +60,6 @@
   }
   form {
     width: min(26rem, 90vw);
-    display: flex;
-    flex-direction: column;
-    gap: 0.9rem;
     animation: rise 400ms ease both;
   }
   .wordmark {
@@ -75,14 +75,14 @@
     letter-spacing: 0.1em;
     text-transform: uppercase;
   }
-  .hint {
-    color: var(--dim);
-    font-size: 0.75rem;
-    line-height: 1.5;
-    margin: 0;
-  }
   @keyframes rise {
-    from { transform: translateY(12px); opacity: 0; }
-    to { transform: none; opacity: 1; }
+    from {
+      transform: translateY(12px);
+      opacity: 0;
+    }
+    to {
+      transform: none;
+      opacity: 1;
+    }
   }
 </style>

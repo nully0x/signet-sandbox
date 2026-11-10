@@ -1,28 +1,46 @@
 /* signet design system — deliberately plain.
-   Dark background, one accent, hairline borders, system type.
-   Monospace is reserved for values people copy. */
+   Dark surfaces, one accent, hairline borders, system type.
+   Monospace is reserved for values people copy.
+   This file owns tokens and base rules only; components own their styles. */
 
 :root {
+  /* surfaces */
   --bg: #121417;
   --panel: #1a1e23;
   --panel-deep: #16191d;
+  --hover: #21262c;
+
+  /* lines */
   --line: #2c333b;
   --line-strong: #434d58;
+
+  /* text */
   --ink: #e8ecef;
   --dim: #9aa7b2;
   --faint: #646f7a;
-  --hover: #21262c;
 
+  /* status */
+  --green: #3fce7c;
+  --amber: #e2a33e;
+  --red: #f0564f;
+
+  /* accent */
   --accent: #5aa2ff;
   --accent-ink: #0b1220;
 
-  --green: #3fce7c;
-  --red: #f0564f;
-
+  /* type */
   --font-data: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+
+  /* space */
+  --s-1: 0.25rem;
+  --s-2: 0.5rem;
+  --s-3: 0.75rem;
+  --s-4: 1rem;
+  --s-5: 1.5rem;
+  --s-6: 2.5rem;
+
   --radius: 4px;
-  --pad-panel: 1rem 1.1rem;
-  --sheet-max: 60rem;
+  --ease: 120ms ease;
 }
 
 * {
@@ -61,103 +79,17 @@ h3 {
   font-weight: 600;
 }
 
-/* ---------- primitives ---------- */
-
-.sheet {
-  max-width: var(--sheet-max);
-  margin: 0 auto;
-  padding: 1.75rem 1.25rem 4rem;
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
-.panel {
-  border: 1px solid var(--line);
-  background: var(--panel);
-  border-radius: var(--radius);
-  padding: var(--pad-panel);
-  margin-bottom: 1rem;
+/* tabular figures for anything that counts (ttl, amounts) */
+.tnum {
+  font-variant-numeric: tabular-nums;
 }
 
-.panel-title {
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--dim);
-  margin: 0.1rem 0 0.7rem;
-}
-
-.btn {
-  font: inherit;
-  font-size: 0.85rem;
-  padding: 0.4rem 0.85rem;
-  cursor: pointer;
-  border: 1px solid var(--line-strong);
-  background: var(--panel);
-  color: var(--ink);
-  border-radius: var(--radius);
-  transition: background 100ms ease, border-color 100ms ease;
-}
-.btn:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.btn:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-.btn--primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-ink);
-}
-.btn--primary:hover:not(:disabled) {
-  background: #79b4ff;
-  border-color: #79b4ff;
-  color: var(--accent-ink);
-}
-.btn--danger {
-  color: var(--red);
-  border-color: var(--red);
-}
-.btn--danger:hover:not(:disabled) {
-  background: var(--red);
-  color: #fff;
-}
-.btn--danger.confirm {
-  background: var(--red);
-  border-color: var(--red);
-  color: #fff;
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  margin-bottom: 0.9rem;
-}
-.field > label,
-.field > .field-label {
-  font-size: 0.78rem;
-  font-weight: 500;
-  color: var(--dim);
-}
-.input {
-  font: inherit;
-  font-size: 0.88rem;
-  background: var(--panel);
-  border: 1px solid var(--line-strong);
-  color: var(--ink);
-  padding: 0.5rem 0.65rem;
-  border-radius: var(--radius);
-  outline: none;
-  width: 100%;
-}
-.input:focus {
-  border-color: var(--accent);
-}
-.input::placeholder {
-  color: var(--faint);
-}
+/* utility text */
 .hint {
   font-size: 0.75rem;
   color: var(--dim);
@@ -169,4 +101,14 @@ h3 {
 .note {
   color: var(--dim);
   font-size: 0.8rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
