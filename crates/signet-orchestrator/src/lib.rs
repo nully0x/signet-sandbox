@@ -9,7 +9,7 @@ use kube::{Client, Error};
 use serde::Deserialize;
 use serde_json::json;
 use serde_yaml::Value;
-use signet_core::env::LightningInstance;
+use signet_core::env::{LightningImplementation, LightningInstance};
 use signet_core::versions::VersionCatalog;
 
 mod reaper;
@@ -19,11 +19,16 @@ const BITCOIND_MANIFEST: &str = include_str!("../templates/bitcoind.yaml");
 const SIGNER_MANIFEST: &str = include_str!("../templates/signer.yaml");
 const FAUCET_MANIFEST: &str = include_str!("../templates/faucet.yaml");
 const LND_MANIFEST: &str = include_str!("../templates/lnd.yaml");
+const CLN_MANIFEST: &str = include_str!("../templates/cln.yaml");
 const LND_MACAROON_PATH: &str = "/root/.lnd/data/chain/bitcoin/signet/admin.macaroon";
 /// lncli's default `~/.lnd/tls.cert` no longer exists; the provisioned
 /// leaf cert lives under /root/.lnd/tls and must be passed explicitly.
 const LND_TLS_CERT_FLAG: &str = "--tlscertpath=/root/.lnd/tls/tls.crt";
 const LND_WALLET_PASSWORD_KEY: &str = "LND_WALLET_PASSWORD";
+const LND_REST_PORT: i32 = 8080;
+const LND_GRPC_PORT: i32 = 10009;
+const CLN_REST_PORT: i32 = 7572;
+const LN_P2P_PORT: i32 = 9735;
 const ELECTRS_MANIFEST: &str = include_str!("../templates/electrs.yaml");
 const EXPLORER_MANIFEST: &str = include_str!("../templates/explorer.yaml");
 const HTTPROUTE_MANIFEST: &str = include_str!("../templates/httproute.yaml");
@@ -84,6 +89,7 @@ pub const VERSIONED_COMPONENTS: &[(&str, &str, &str)] = &[
     ("bitcoind", "bitcoin/bitcoin", "docker.io/"),
     ("electrs", "electrs", "ghcr.io/nully0x/"),
     ("lnd", "lightninglabs/lnd", "docker.io/"),
+    ("cln", "elementsproject/lightningd", "docker.io/"),
     ("explorer", "mempool/backend", "docker.io/"),
 ];
 
@@ -184,7 +190,7 @@ fn validate_tag(tag: &str) -> Result<(), VersionError> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum VersionError {
-    #[error("unknown component `{0}` (expected bitcoind, electrs, explorer, or lnd)")]
+    #[error("unknown component `{0}` (expected bitcoind, electrs, explorer, lnd, or cln)")]
     UnknownComponent(String),
     #[error("invalid image tag `{0}` (expected alphanumeric with . _ -)")]
     BadTag(String),
@@ -271,10 +277,45 @@ pub fn namespace_for(env_id: &str) -> String {
     format!("env-{env_id}")
 }
 
-/// The lnd instance runs as a StatefulSet, so its pod name is stable.
-/// All exec traffic (wallet init, file reads) targets this name.
-fn lnd_pod_name(instance: &str) -> String {
-    format!("lnd-{instance}-0")
+/// The instance runs as a StatefulSet, so its pod name is stable. All
+/// exec traffic (credential reads, cli commands) targets this name.
+fn lightning_pod_name(
+    instance: &str,
+    implementation: LightningImplementation,
+) -> Result<String, OrchestrateError> {
+    Ok(format!(
+        "{}-{instance}-0",
+        lightning_service_prefix(implementation)?
+    ))
+}
+
+/// In-cluster service name prefix of one implementation: the pod name
+/// stem, the TLS secret prefix, and the mesh connect target all derive
+/// from it. Only the two buildable implementations are supported.
+fn lightning_service_prefix(
+    implementation: LightningImplementation,
+) -> Result<&'static str, OrchestrateError> {
+    match implementation {
+        LightningImplementation::Lnd => Ok("lnd"),
+        LightningImplementation::Cln => Ok("cln"),
+        other => Err(OrchestrateError::Exec(format!(
+            "lightning implementation `{}` is not provisionable",
+            other.as_str()
+        ))),
+    }
+}
+
+/// One instance's manifest with its name substituted; the public host
+/// placeholder is filled in by the caller at apply time.
+fn lightning_manifest(instance: &LightningInstance) -> Result<String, OrchestrateError> {
+    match instance.implementation {
+        LightningImplementation::Lnd => Ok(LND_MANIFEST.replace("LND_NAME", &instance.name)),
+        LightningImplementation::Cln => Ok(CLN_MANIFEST.replace("CLN_NAME", &instance.name)),
+        other => Err(OrchestrateError::Exec(format!(
+            "lightning implementation `{}` has no manifest",
+            other.as_str()
+        ))),
+    }
 }
 
 fn namespace_object(env_id: &str, expires_at: Option<DateTime<Utc>>) -> Namespace {
@@ -345,22 +386,53 @@ fn encode_hex(bytes: &[u8]) -> String {
 
 /// lnd names its hex identity key `identity_pubkey` in getinfo output;
 /// CLN calls the same value `id`. The bundle field is `node_id`.
-fn parse_node_id(out: &[u8]) -> Result<String, OrchestrateError> {
+fn parse_node_id(
+    implementation: LightningImplementation,
+    out: &[u8],
+) -> Result<String, OrchestrateError> {
+    let key = match implementation {
+        LightningImplementation::Lnd => "identity_pubkey",
+        LightningImplementation::Cln => "id",
+        other => {
+            return Err(OrchestrateError::Exec(format!(
+                "lightning implementation `{}` is not provisionable",
+                other.as_str()
+            )));
+        }
+    };
     let json: serde_json::Value = serde_json::from_slice(out)
         .map_err(|e| OrchestrateError::Exec(format!("getinfo output is not JSON: {e}")))?;
-    json.get("identity_pubkey")
+    json.get(key)
         .and_then(|v| v.as_str())
         .map(str::to_owned)
-        .ok_or_else(|| OrchestrateError::Exec("getinfo has no identity_pubkey".into()))
+        .ok_or_else(|| OrchestrateError::Exec(format!("getinfo has no {key}")))
 }
 
-/// Base lncli invocation: signet network plus the provisioned cert path
-/// (lncli's default `~/.lnd/tls.cert` no longer exists).
-fn lncli_base() -> [&'static str; 3] {
-    ["lncli", "--network=signet", LND_TLS_CERT_FLAG]
+/// Base cli invocation per implementation: signet network everywhere;
+/// lncli additionally needs the provisioned cert path (lncli's default
+/// `~/.lnd/tls.cert` no longer exists).
+fn lightning_cli_base(implementation: LightningImplementation) -> Vec<&'static str> {
+    match implementation {
+        LightningImplementation::Lnd => ["lncli", "--network=signet", LND_TLS_CERT_FLAG].to_vec(),
+        LightningImplementation::Cln => vec!["lightning-cli", "--network=signet"],
+        _ => Vec::new(),
+    }
 }
 
-fn parse_peer_keys(out: &[u8]) -> Result<Vec<String>, OrchestrateError> {
+fn parse_peer_keys(
+    implementation: LightningImplementation,
+    out: &[u8],
+) -> Result<Vec<String>, OrchestrateError> {
+    let key = match implementation {
+        LightningImplementation::Lnd => "pub_key",
+        LightningImplementation::Cln => "id",
+        other => {
+            return Err(OrchestrateError::Exec(format!(
+                "lightning implementation `{}` is not provisionable",
+                other.as_str()
+            )));
+        }
+    };
     let json: serde_json::Value = serde_json::from_slice(out)
         .map_err(|e| OrchestrateError::Exec(format!("listpeers output is not JSON: {e}")))?;
     Ok(json
@@ -369,11 +441,40 @@ fn parse_peer_keys(out: &[u8]) -> Result<Vec<String>, OrchestrateError> {
         .map(|peers| {
             peers
                 .iter()
-                .filter_map(|p| p.get("pub_key").and_then(|k| k.as_str()))
+                .filter_map(|p| p.get(key).and_then(|k| k.as_str()))
                 .map(str::to_owned)
                 .collect()
         })
         .unwrap_or_default())
+}
+
+/// Reuse the unrestricted rune when one exists; mint only on first
+/// need. Minting on every read would accumulate runes in the node's db.
+fn parse_unrestricted_rune(out: &[u8]) -> Option<String> {
+    let json: serde_json::Value = serde_json::from_slice(out).ok()?;
+    json.get("runes")
+        .and_then(|v| v.as_array())
+        .and_then(|runes| {
+            runes
+                .iter()
+                .find(|r| {
+                    r.get("restrictions")
+                        .and_then(|v| v.as_array())
+                        .is_some_and(|a| a.is_empty())
+                })
+                .and_then(|r| r.get("rune"))
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+        })
+}
+
+fn parse_minted_rune(out: &[u8]) -> Result<String, OrchestrateError> {
+    let json: serde_json::Value = serde_json::from_slice(out)
+        .map_err(|e| OrchestrateError::Exec(format!("createrune output is not JSON: {e}")))?;
+    json.get("rune")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned)
+        .ok_or_else(|| OrchestrateError::Exec("createrune has no rune".into()))
 }
 
 fn write_compact_size(out: &mut Vec<u8>, len: usize) {
@@ -450,12 +551,6 @@ fn compose_explorer_url(
         "{url_scheme}://{}",
         explorer_hostname(env_host, env_id)
     ))
-}
-
-// One instance's manifest with its name substituted; the public host
-// placeholder is filled in by the caller at apply time.
-fn lnd_manifest(instance: &LightningInstance) -> String {
-    LND_MANIFEST.replace("LND_NAME", &instance.name)
 }
 
 // `--env-host` accepts `[scheme://]host`; a bare host rides plain HTTP.
@@ -668,7 +763,7 @@ impl Orchestrator {
                 .await?;
         }
         for (instance, rest_port) in params.lightning {
-            self.apply_lnd(&ns, instance, params.images, *rest_port)
+            self.apply_lightning(&ns, instance, params.images, *rest_port)
                 .await?;
         }
         // lnd self-bootstraps: with --noseedbackup it creates and
@@ -692,10 +787,27 @@ impl Orchestrator {
     }
 
     /// Apply one Lightning instance's TLS material, manifest, and
-    /// LoadBalancer service. The template's LND_NAME placeholder carries
+    /// LoadBalancer service. The template's name placeholder carries
     /// the instance name and the container image comes from the resolved
     /// versions map. The TLS secret is created once: a re-apply keeps the
     /// original certs, so client-pinned roots stay valid.
+    async fn apply_lightning(
+        &self,
+        ns: &str,
+        instance: &LightningInstance,
+        images: &BTreeMap<String, String>,
+        rest_port: i32,
+    ) -> Result<(), OrchestrateError> {
+        match instance.implementation {
+            LightningImplementation::Lnd => self.apply_lnd(ns, instance, images, rest_port).await,
+            LightningImplementation::Cln => self.apply_cln(ns, instance, images, rest_port).await,
+            other => Err(OrchestrateError::Exec(format!(
+                "lightning implementation `{}` is not provisionable",
+                other.as_str()
+            ))),
+        }
+    }
+
     async fn apply_lnd(
         &self,
         ns: &str,
@@ -703,34 +815,93 @@ impl Orchestrator {
         images: &BTreeMap<String, String>,
         rest_port: i32,
     ) -> Result<(), OrchestrateError> {
-        let instance_tls = tls::generate_instance_tls(&instance.name, ns, &self.ln_host)?;
-        self.apply_lnd_tls_secret(ns, &instance.name, &instance_tls)
-            .await?;
-        let manifest = lnd_manifest(instance);
-        self.apply_manifest(ns, &manifest, images).await?;
-        self.apply_lnd_lb(ns, instance, rest_port).await
-    }
-
-    /// Create the instance's TLS secret (`ca.crt`, `tls.crt` chain,
-    /// `tls.key`). The pod mounts it read-only; LND serves the leaf+CA
-    /// chain from it, which strict clients verify against the pinned CA.
-    async fn apply_lnd_tls_secret(
-        &self,
-        ns: &str,
-        instance: &str,
-        instance_tls: &tls::InstanceTls,
-    ) -> Result<(), OrchestrateError> {
-        let secret = Secret {
-            metadata: ObjectMeta {
-                name: Some(format!("lnd-{instance}-tls")),
-                namespace: Some(ns.to_string()),
-                ..Default::default()
-            },
-            string_data: Some(BTreeMap::from([
+        let instance_tls = tls::generate_instance_tls("lnd", &instance.name, ns, &self.ln_host)?;
+        self.create_secret_once(
+            ns,
+            &format!("lnd-{}-tls", instance.name),
+            [
                 ("ca.crt".to_string(), instance_tls.ca_pem.clone()),
                 ("tls.crt".to_string(), instance_tls.chain_pem.clone()),
                 ("tls.key".to_string(), instance_tls.key_pem.clone()),
-            ])),
+            ],
+        )
+        .await?;
+        let manifest = lightning_manifest(instance)?;
+        self.apply_manifest(ns, &manifest, images).await?;
+        self.apply_lightning_lb(
+            ns,
+            "lnd",
+            instance,
+            rest_port,
+            &[
+                ("rest", 0, LND_REST_PORT),
+                ("grpc", 1, LND_GRPC_PORT),
+                ("p2p", 2, LN_P2P_PORT),
+            ],
+        )
+        .await
+    }
+
+    async fn apply_cln(
+        &self,
+        ns: &str,
+        instance: &LightningInstance,
+        images: &BTreeMap<String, String>,
+        rest_port: i32,
+    ) -> Result<(), OrchestrateError> {
+        let instance_tls = tls::generate_instance_tls("cln", &instance.name, ns, &self.ln_host)?;
+        // The six-file set satisfies clnrest's generation check; only
+        // server.pem/server-key.pem are served, the rest must merely
+        // exist so clnrest keeps the pre-seeded material.
+        self.create_secret_once(
+            ns,
+            &format!("cln-{}-tls", instance.name),
+            [
+                ("ca.pem".to_string(), instance_tls.ca_pem.clone()),
+                ("ca-key.pem".to_string(), instance_tls.ca_key_pem.clone()),
+                ("server.pem".to_string(), instance_tls.chain_pem.clone()),
+                ("server-key.pem".to_string(), instance_tls.key_pem.clone()),
+                ("client.pem".to_string(), instance_tls.client_pem.clone()),
+                (
+                    "client-key.pem".to_string(),
+                    instance_tls.client_key_pem.clone(),
+                ),
+            ],
+        )
+        .await?;
+        let manifest = lightning_manifest(instance)?;
+        self.apply_manifest(ns, &manifest, images).await?;
+        self.apply_lightning_lb(
+            ns,
+            "cln",
+            instance,
+            rest_port,
+            &[
+                ("rest", 0, CLN_REST_PORT),
+                // The +1 slot of the allocated triple stays reserved but
+                // unmapped: cln-grpc is disabled and no credential for it
+                // rides the bundle. The uniform triple lets lnd and cln
+                // instances mix without two pool layouts.
+                ("p2p", 2, LN_P2P_PORT),
+            ],
+        )
+        .await
+    }
+
+    /// Create one secret; an existing name is kept (409 on create).
+    async fn create_secret_once(
+        &self,
+        ns: &str,
+        name: &str,
+        entries: impl IntoIterator<Item = (String, String)>,
+    ) -> Result<(), OrchestrateError> {
+        let secret = Secret {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some(ns.to_string()),
+                ..Default::default()
+            },
+            string_data: Some(entries.into_iter().collect()),
             ..Default::default()
         };
         let secrets: Api<Secret> = Api::namespaced(self.client.clone(), ns);
@@ -741,18 +912,39 @@ impl Orchestrator {
         }
     }
 
-    /// REST + gRPC exposure for one instance: a LoadBalancer service
-    /// (klipper binds it on the node; the local k3d cluster publishes the
-    /// same host ports) whose two ports land on the lnd listeners.
-    async fn apply_lnd_lb(
+    /// Exposure for one instance: a LoadBalancer service (klipper binds
+    /// it on the node; the local k3d cluster publishes the same host
+    /// ports) whose ports land on the node's listeners. Each entry is
+    /// (listener name, host offset from rest_port, container port);
+    /// offsets pin the p2p port to the allocated triple's third slot for
+    /// every implementation.
+    async fn apply_lightning_lb(
         &self,
         ns: &str,
+        prefix: &str,
         instance: &LightningInstance,
         rest_port: i32,
+        listeners: &[(&str, i32, i32)],
     ) -> Result<(), OrchestrateError> {
+        let ports = listeners
+            .iter()
+            .map(
+                |(name, host_offset, container_port)| k8s_openapi::api::core::v1::ServicePort {
+                    name: Some(name.to_string()),
+                    port: rest_port + host_offset,
+                    target_port: Some(
+                        k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(
+                            *container_port,
+                        ),
+                    ),
+                    protocol: Some("TCP".to_string()),
+                    ..Default::default()
+                },
+            )
+            .collect();
         let svc = Service {
             metadata: ObjectMeta {
-                name: Some(format!("lnd-lb-{}", instance.name)),
+                name: Some(format!("{prefix}-lb-{}", instance.name)),
                 namespace: Some(ns.to_string()),
                 ..Default::default()
             },
@@ -760,37 +952,9 @@ impl Orchestrator {
                 type_: Some("LoadBalancer".to_string()),
                 selector: Some(BTreeMap::from([(
                     "app".to_string(),
-                    format!("lnd-{}", instance.name),
+                    format!("{prefix}-{}", instance.name),
                 )])),
-                ports: Some(vec![
-                    k8s_openapi::api::core::v1::ServicePort {
-                        name: Some("rest".to_string()),
-                        port: rest_port,
-                        target_port: Some(
-                            k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(8080),
-                        ),
-                        protocol: Some("TCP".to_string()),
-                        ..Default::default()
-                    },
-                    k8s_openapi::api::core::v1::ServicePort {
-                        name: Some("grpc".to_string()),
-                        port: rest_port + 1,
-                        target_port: Some(
-                            k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(10009),
-                        ),
-                        protocol: Some("TCP".to_string()),
-                        ..Default::default()
-                    },
-                    k8s_openapi::api::core::v1::ServicePort {
-                        name: Some("p2p".to_string()),
-                        port: rest_port + 2,
-                        target_port: Some(
-                            k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(9735),
-                        ),
-                        protocol: Some("TCP".to_string()),
-                        ..Default::default()
-                    },
-                ]),
+                ports: Some(ports),
                 ..Default::default()
             }),
             status: None,
@@ -823,14 +987,14 @@ impl Orchestrator {
         &self,
         env_id: &str,
         instance: &str,
+        implementation: LightningImplementation,
         args: Vec<&str>,
     ) -> Result<Vec<u8>, OrchestrateError> {
         let ns = namespace_for(env_id);
         let pods: Api<Pod> = Api::namespaced(self.client.clone(), &ns);
+        let pod = lightning_pod_name(instance, implementation)?;
         let command = args.join(" ");
-        let mut attached = pods
-            .exec(&lnd_pod_name(instance), args, &AttachParams::default())
-            .await?;
+        let mut attached = pods.exec(&pod, args, &AttachParams::default()).await?;
         let mut stdout = attached
             .stdout()
             .ok_or_else(|| OrchestrateError::Exec("no stdout".to_string()))?;
@@ -845,10 +1009,7 @@ impl Orchestrator {
             None => false,
         };
         if !success {
-            return Err(OrchestrateError::Exec(format!(
-                "{command} in {} failed",
-                lnd_pod_name(instance)
-            )));
+            return Err(OrchestrateError::Exec(format!("{command} in {pod} failed")));
         }
         Ok(buf)
     }
@@ -858,116 +1019,176 @@ impl Orchestrator {
         &self,
         env_id: &str,
         instance: &str,
+        implementation: LightningImplementation,
         path: &str,
     ) -> Result<Vec<u8>, OrchestrateError> {
-        self.exec_in_pod(env_id, instance, vec!["cat", path]).await
+        self.exec_in_pod(env_id, instance, implementation, vec!["cat", path])
+            .await
     }
 
-    /// Read the admin macaroon out of the instance's pod (hex-encoded).
-    /// Fails while the wallet is still being created — callers treat that
-    /// as "not ready yet".
-    pub async fn lightning_admin_macaroon(
+    /// Per-instance credential: lnd's admin macaroon or a cln commando
+    /// rune (minted via `createrune`; the old `commando-rune` name was
+    /// removed in recent CLN releases). Fails while the node is still
+    /// initializing — callers treat that as "not ready yet".
+    pub async fn lightning_credential(
         &self,
         env_id: &str,
         instance: &str,
-    ) -> Result<String, OrchestrateError> {
-        let buf = self
-            .read_pod_file(env_id, instance, LND_MACAROON_PATH)
-            .await?;
-        Ok(encode_hex(&buf))
+        implementation: LightningImplementation,
+    ) -> Result<(String, String), OrchestrateError> {
+        match implementation {
+            LightningImplementation::Lnd => {
+                let buf = self
+                    .read_pod_file(env_id, instance, implementation, LND_MACAROON_PATH)
+                    .await?;
+                Ok(("macaroon".to_string(), encode_hex(&buf)))
+            }
+            LightningImplementation::Cln => {
+                let cli = lightning_cli_base(implementation);
+                // Reuse the unrestricted rune when one exists; minting on
+                // every read would accumulate runes in the node's db.
+                let shown = self
+                    .exec_in_pod(
+                        env_id,
+                        instance,
+                        implementation,
+                        [cli.as_slice(), &["showrunes"]].concat(),
+                    )
+                    .await?;
+                if let Some(rune) = parse_unrestricted_rune(&shown) {
+                    return Ok(("rune".to_string(), rune));
+                }
+                let minted = self
+                    .exec_in_pod(
+                        env_id,
+                        instance,
+                        implementation,
+                        [cli.as_slice(), &["createrune"]].concat(),
+                    )
+                    .await?;
+                Ok(("rune".to_string(), parse_minted_rune(&minted)?))
+            }
+            other => Err(OrchestrateError::Exec(format!(
+                "lightning implementation `{}` has no credential scheme",
+                other.as_str()
+            ))),
+        }
     }
 
     /// The instance's TLS CA as hex of the PEM file bytes — the same
     /// bytes `xxd -p` produces. Public material; clients pin it as a
-    /// root. Only the macaroon is a secret.
+    /// root. Only the macaroon/rune is a secret.
     pub async fn lightning_tls_ca(
         &self,
         env_id: &str,
         instance: &str,
+        implementation: LightningImplementation,
     ) -> Result<String, OrchestrateError> {
+        let prefix = lightning_service_prefix(implementation)?;
+        let ca_key = match implementation {
+            LightningImplementation::Lnd => "ca.crt",
+            LightningImplementation::Cln => "ca.pem",
+            other => {
+                return Err(OrchestrateError::Exec(format!(
+                    "lightning implementation `{}` is not provisionable",
+                    other.as_str()
+                )));
+            }
+        };
         let ns = namespace_for(env_id);
         let secrets: Api<Secret> = Api::namespaced(self.client.clone(), &ns);
-        let secret = secrets.get(&format!("lnd-{instance}-tls")).await?;
+        let secret = secrets.get(&format!("{prefix}-{instance}-tls")).await?;
         secret
             .data
             .as_ref()
-            .and_then(|entries| entries.get("ca.crt"))
+            .and_then(|entries| entries.get(ca_key))
             .map(|bytes| encode_hex(&bytes.0))
             .ok_or_else(|| {
-                OrchestrateError::Exec(format!("secret lnd-{instance}-tls has no ca.crt"))
+                OrchestrateError::Exec(format!("secret {prefix}-{instance}-tls has no {ca_key}"))
             })
     }
 
-    /// Identity public key (hex) of one instance's node, via
-    /// `lncli getinfo` in the pod. Fails while the wallet is still being
-    /// created — callers treat that as "not ready yet".
+    /// Identity public key (hex) of one instance's node, via its cli
+    /// getinfo in the pod. Fails while the node is still initializing —
+    /// callers treat that as "not ready yet".
     pub async fn lightning_node_id(
         &self,
         env_id: &str,
         instance: &str,
+        implementation: LightningImplementation,
     ) -> Result<String, OrchestrateError> {
+        let mut args = lightning_cli_base(implementation);
+        args.push("getinfo");
         let buf = self
-            .exec_in_pod(
-                env_id,
-                instance,
-                vec!["lncli", "--network=signet", LND_TLS_CERT_FLAG, "getinfo"],
-            )
+            .exec_in_pod(env_id, instance, implementation, args)
             .await?;
-        parse_node_id(&buf)
+        parse_node_id(implementation, &buf)
     }
 
     /// Initiate one p2p connection between two instances of the same
     /// environment. Envs are isolated chains (the signet magic derives
     /// from the per-env challenge), so public signet seeds can never
-    /// peer — sibling instances are the only reachable peers.
+    /// peer — sibling instances are the only reachable peers. The cli
+    /// and the target's in-cluster name follow each side's
+    /// implementation, so lnd and cln instances cross-connect.
     pub async fn lightning_connect_peer(
         &self,
         env_id: &str,
         instance: &str,
+        implementation: LightningImplementation,
         peer_node_id: &str,
         peer_instance: &str,
+        peer_implementation: LightningImplementation,
     ) -> Result<(), OrchestrateError> {
-        let target = format!("{peer_node_id}@lnd-{peer_instance}:9735");
-        let mut args: Vec<&str> = lncli_base().to_vec();
+        let peer_prefix = lightning_service_prefix(peer_implementation)?;
+        let target = format!("{peer_node_id}@{peer_prefix}-{peer_instance}:{LN_P2P_PORT}");
+        let mut args = lightning_cli_base(implementation);
         args.extend(["connect", &target]);
-        self.exec_in_pod(env_id, instance, args).await?;
+        self.exec_in_pod(env_id, instance, implementation, args)
+            .await?;
         Ok(())
     }
 
     /// Cross-connect every instance pair in one environment. Idempotent:
     /// pairs that are already peered are never re-connected (a repeated
     /// ConnectPeer makes lnd log an error). Returns the number of new
-    /// connections initiated. Fails while any wallet is still being
-    /// created — callers treat that as "not ready yet" and retry.
+    /// connections initiated. Fails while any node is still initializing
+    /// — callers treat that as "not ready yet" and retry.
     pub async fn mesh_lightning_peers(
         &self,
         env_id: &str,
-        instances: &[String],
+        instances: &[(String, LightningImplementation)],
     ) -> Result<usize, OrchestrateError> {
         if instances.len() < 2 {
             return Ok(0);
         }
         let mut node_ids = Vec::with_capacity(instances.len());
-        for instance in instances {
-            node_ids.push(self.lightning_node_id(env_id, instance).await?);
+        for (instance, implementation) in instances {
+            node_ids.push(
+                self.lightning_node_id(env_id, instance, *implementation)
+                    .await?,
+            );
         }
         let mut initiated = 0;
-        for (a_idx, a) in instances.iter().enumerate() {
+        for (a_idx, (a, a_impl)) in instances.iter().enumerate() {
             // Only connect pairs that are not peered yet: a repeated
             // ConnectPeer on a live connection makes lnd log an error
             // every reconcile pass (Polar checks first for the same
             // reason).
-            let a_peers = self.lightning_peer_keys(env_id, a).await?;
-            for (b, b_node_id) in instances.iter().zip(&node_ids).skip(a_idx + 1) {
+            let a_peers = self.lightning_peer_keys(env_id, a, *a_impl).await?;
+            for ((b, b_impl), b_node_id) in instances.iter().zip(&node_ids).skip(a_idx + 1) {
                 if a_peers.iter().any(|p| p == b_node_id) {
                     continue;
                 }
-                match self.lightning_connect_peer(env_id, a, b_node_id, b).await {
+                match self
+                    .lightning_connect_peer(env_id, a, *a_impl, b_node_id, b, *b_impl)
+                    .await
+                {
                     Ok(()) => initiated += 1,
                     // A concurrent connect wins the race: already-peered
                     // is success. Any other error propagates for retry.
                     Err(e) => {
-                        let peers = self.lightning_peer_keys(env_id, a).await?;
+                        let peers = self.lightning_peer_keys(env_id, a, *a_impl).await?;
                         if !peers.iter().any(|p| p == b_node_id) {
                             return Err(e);
                         }
@@ -978,16 +1199,19 @@ impl Orchestrator {
         Ok(initiated)
     }
 
-    /// Pubkeys of one instance's current p2p peers.
+    /// Node ids of one instance's current p2p peers.
     pub async fn lightning_peer_keys(
         &self,
         env_id: &str,
         instance: &str,
+        implementation: LightningImplementation,
     ) -> Result<Vec<String>, OrchestrateError> {
-        let mut args: Vec<&str> = lncli_base().to_vec();
+        let mut args = lightning_cli_base(implementation);
         args.push("listpeers");
-        let buf = self.exec_in_pod(env_id, instance, args).await?;
-        parse_peer_keys(&buf)
+        let buf = self
+            .exec_in_pod(env_id, instance, implementation, args)
+            .await?;
+        parse_peer_keys(implementation, &buf)
     }
 
     /// Apply additional lightning instances into an existing env's
@@ -1002,10 +1226,16 @@ impl Orchestrator {
         lnd_wallet_password: &str,
     ) -> Result<(), OrchestrateError> {
         let ns = namespace_for(env_id);
-        self.ensure_lnd_wallet_password(&ns, lnd_wallet_password)
-            .await?;
+        if instances
+            .iter()
+            .any(|(i, _)| i.implementation == LightningImplementation::Lnd)
+        {
+            self.ensure_lnd_wallet_password(&ns, lnd_wallet_password)
+                .await?;
+        }
         for (instance, rest_port) in instances {
-            self.apply_lnd(&ns, instance, images, *rest_port).await?;
+            self.apply_lightning(&ns, instance, images, *rest_port)
+                .await?;
         }
         Ok(())
     }
@@ -1340,10 +1570,11 @@ mod tests {
 
     #[test]
     fn lnd_manifest_mounts_the_instance_tls_secret() {
-        let manifest = lnd_manifest(&LightningInstance {
+        let manifest = lightning_manifest(&LightningInstance {
             name: "ln-smoke".to_string(),
             implementation: LightningImplementation::Lnd,
-        });
+        })
+        .unwrap();
         assert!(manifest.contains("secretName: lnd-ln-smoke-tls"));
         assert!(manifest.contains("--tlscertpath=/root/.lnd/tls/tls.crt"));
         assert!(manifest.contains("--tlskeypath=/root/.lnd/tls/tls.key"));
@@ -1353,42 +1584,114 @@ mod tests {
     }
 
     #[test]
-    fn lnd_exec_targets_the_statefulset_pod() {
-        assert_eq!(lnd_pod_name("ln-alice"), "lnd-ln-alice-0");
+    fn cln_manifest_preseeds_the_clnrest_certs_and_skips_grpc() {
+        let manifest = lightning_manifest(&LightningInstance {
+            name: "ln-carol".to_string(),
+            implementation: LightningImplementation::Cln,
+        })
+        .unwrap();
+        assert!(manifest.contains("secretName: cln-ln-carol-tls"));
+        assert!(manifest.contains("--clnrest-certs=/root/.lightning/rest-tls"));
+        assert!(manifest.contains("--clnrest-host=0.0.0.0"));
+        assert!(manifest.contains("--clnrest-port=7572"));
+        assert!(
+            !manifest.contains("--grpc-port"),
+            "cln-grpc must stay disabled"
+        );
+        assert!(manifest.contains("LIGHTNINGD_NETWORK\n              value: signet"));
+        assert!(manifest.contains("--bitcoin-rpcconnect=bitcoind"));
     }
 
     #[test]
-    fn getinfo_yields_the_identity_key() {
+    fn cln_manifests_parse_into_known_kinds() {
+        for value in Orchestrator::parse_docs(CLN_MANIFEST).unwrap() {
+            let probe: ManifestProbe = serde_yaml::from_value(value).unwrap();
+            assert!(
+                matches!(probe.kind.as_str(), "Service" | "StatefulSet"),
+                "unexpected kind {}",
+                probe.kind
+            );
+        }
+    }
+
+    #[test]
+    fn exec_targets_the_statefulset_pod_per_implementation() {
+        assert_eq!(
+            lightning_pod_name("ln-alice", LightningImplementation::Lnd).unwrap(),
+            "lnd-ln-alice-0"
+        );
+        assert_eq!(
+            lightning_pod_name("ln-carol", LightningImplementation::Cln).unwrap(),
+            "cln-ln-carol-0"
+        );
+        assert!(lightning_pod_name("x", LightningImplementation::Eclair).is_err());
+    }
+
+    #[test]
+    fn getinfo_yields_the_identity_key_per_implementation() {
         let out = br#"{
             "version": "0.21.4-beta",
             "identity_pubkey": "02aa550000000000000000000000000000000000000000000000000000000000"
         }"#;
         assert_eq!(
-            parse_node_id(out).unwrap(),
+            parse_node_id(LightningImplementation::Lnd, out).unwrap(),
             "02aa550000000000000000000000000000000000000000000000000000000000"
+        );
+        let out = br#"{
+            "id": "03cc770000000000000000000000000000000000000000000000000000000000",
+            "alias": "ln-carol"
+        }"#;
+        assert_eq!(
+            parse_node_id(LightningImplementation::Cln, out).unwrap(),
+            "03cc770000000000000000000000000000000000000000000000000000000000"
         );
     }
 
     #[test]
     fn malformed_getinfo_output_is_an_error() {
-        assert!(parse_node_id(b"{}").is_err());
-        assert!(parse_node_id(b"not json").is_err());
+        assert!(parse_node_id(LightningImplementation::Lnd, b"{}").is_err());
+        assert!(parse_node_id(LightningImplementation::Cln, b"{}").is_err());
+        assert!(parse_node_id(LightningImplementation::Lnd, b"not json").is_err());
     }
 
     #[test]
-    fn listpeers_yields_peer_pubkeys() {
+    fn listpeers_yields_peer_keys_per_implementation() {
         let out = br#"{"peers": [{"pub_key": "02aa", "address": "10.42.0.21:9735"},
                              {"pub_key": "03bb", "address": "10.42.0.22:9735"}]}"#;
-        assert_eq!(parse_peer_keys(out).unwrap(), vec!["02aa", "03bb"]);
+        assert_eq!(
+            parse_peer_keys(LightningImplementation::Lnd, out).unwrap(),
+            vec!["02aa", "03bb"]
+        );
+        let out = br#"{"peers": [{"id": "02aa", "connected": true},
+                             {"id": "03bb", "connected": true}]}"#;
+        assert_eq!(
+            parse_peer_keys(LightningImplementation::Cln, out).unwrap(),
+            vec!["02aa", "03bb"]
+        );
     }
 
     #[test]
     fn listpeers_without_peers_is_empty() {
         assert_eq!(
-            parse_peer_keys(br#"{"peers": []}"#).unwrap(),
+            parse_peer_keys(LightningImplementation::Lnd, br#"{"peers": []}"#).unwrap(),
             Vec::<String>::new()
         );
-        assert!(parse_peer_keys(b"not json").is_err());
+        assert!(parse_peer_keys(LightningImplementation::Lnd, b"not json").is_err());
+    }
+
+    #[test]
+    fn runes_reuse_the_unrestricted_one_and_minted_output_parses() {
+        let shown = br#"{"runes": [
+            {"rune": "restricted", "unique_id": "1", "restrictions": [{"alternatives": ["method#equals=listpeers"]}]},
+            {"rune": "master", "unique_id": "0", "restrictions": []}
+        ]}"#;
+        assert_eq!(parse_unrestricted_rune(shown).as_deref(), Some("master"));
+
+        let shown = br#"{"runes": [{"rune": "restricted", "unique_id": "1", "restrictions": [{"alternatives": []}]}]}"#;
+        assert_eq!(parse_unrestricted_rune(shown), None);
+
+        let minted = br#"{"rune": "AqxyVg", "unique_id": "2", "restrictions": [], "restrictionsstrings": []}"#;
+        assert_eq!(parse_minted_rune(minted).unwrap(), "AqxyVg");
     }
 
     use super::*;
@@ -1737,6 +2040,15 @@ mod tests {
             "docker.io/lightninglabs/lnd:v0.20.5-beta"
         );
         assert_eq!(images.get("signer").unwrap(), "signet-signer:dev");
+    }
+
+    #[test]
+    fn resolve_images_defaults_cln_to_the_upstream_image() {
+        let images = resolve_images(&catalog(), &None).unwrap();
+        assert_eq!(
+            images.get("cln").unwrap(),
+            "docker.io/elementsproject/lightningd:v26.06.10"
+        );
     }
 
     #[test]

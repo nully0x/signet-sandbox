@@ -26,5 +26,8 @@ requires = { bitcoind = ">= 25" }
 [lnd."v0.20.5-beta"]
 requires = { bitcoind = ">= 24" }
 
+[cln."v26.06.10"]
+default = true
+
 [explorer."v3.3.1"]
 default = true

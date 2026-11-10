@@ -22,7 +22,11 @@ pub struct LightningConnection {
     /// Peering URI `node_id@host:port`; the host port maps to p2p 9735.
     pub node_uri: String,
     pub rest_url: String,
-    pub grpc_url: String,
+    /// gRPC surface; implementations differ in their credential model
+    /// (lnd: macaroon, cln-grpc: a client cert+key pair), so an
+    /// implementation without one that fits the bundle omits the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grpc_url: Option<String>,
     /// Hex of the PEM file bytes of the instance TLS CA (xxd -p form).
     /// Public material; clients hex-decode and pin it as a root — the
     /// served leaf chains to it.
@@ -109,7 +113,7 @@ mod tests {
                 node_id: "02aa55".into(),
                 node_uri: "02aa55@example:21002".into(),
                 rest_url: "https://example/env/ln/rest".into(),
-                grpc_url: "https://example/env/ln/grpc".into(),
+                grpc_url: Some("https://example/env/ln/grpc".into()),
                 tls_cert: "2d2d2d2d2d".into(),
                 auth: BundleAuth {
                     kind: "macaroon".into(),
@@ -133,7 +137,7 @@ mod tests {
                 node_id: "02aa55".into(),
                 node_uri: "02aa55@example:21002".into(),
                 rest_url: "https://example/ln".into(),
-                grpc_url: "https://example/ln-grpc".into(),
+                grpc_url: Some("https://example/ln-grpc".into()),
                 tls_cert: "2d2d2d2d2d".into(),
                 auth: BundleAuth {
                     kind: "macaroon".into(),
@@ -148,6 +152,30 @@ mod tests {
         assert_eq!(entry["node_uri"], "02aa55@example:21002");
         assert_eq!(entry["auth"]["type"], "macaroon");
         assert_eq!(entry["auth"]["value"], "0202");
+    }
+
+    #[test]
+    fn cln_entries_carry_a_rune_and_omit_grpc() {
+        let mut b = core_bundle();
+        b.lightning.insert(
+            "ln-carol".to_string(),
+            LightningConnection {
+                implementation: "cln".into(),
+                node_id: "03cc77".into(),
+                node_uri: "03cc77@example:21004".into(),
+                rest_url: "https://example/ln".into(),
+                grpc_url: None,
+                tls_cert: "2d2d2d2d2d".into(),
+                auth: BundleAuth {
+                    kind: "rune".into(),
+                    value: "AqxyVg5C0O2i".into(),
+                },
+            },
+        );
+        let json = serde_json::to_value(b).unwrap();
+        let entry = &json["lightning"]["ln-carol"];
+        assert_eq!(entry["auth"]["type"], "rune");
+        assert!(entry.get("grpc_url").is_none());
     }
 
     #[test]

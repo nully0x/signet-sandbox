@@ -6,8 +6,20 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use clap::Parser;
+use signet_core::env::LightningImplementation;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
+
+/// The db stores the implementation as its wire string; provisioning
+/// rejects anything but the two buildable variants, so anything else is
+/// corrupt data, not a supported target.
+fn parse_lightning_implementation(value: &str) -> Option<LightningImplementation> {
+    match value {
+        "lnd" => Some(LightningImplementation::Lnd),
+        "cln" => Some(LightningImplementation::Cln),
+        _ => None,
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "signet-api", about = "Signet sandbox provisioning API")]
@@ -136,16 +148,25 @@ async fn main() -> anyhow::Result<()> {
                         continue;
                     }
                 };
-                let mut envs: BTreeMap<Uuid, Vec<String>> = BTreeMap::new();
-                for (env_id, name) in targets {
-                    envs.entry(env_id).or_default().push(name);
+                let mut envs: BTreeMap<Uuid, Vec<(String, LightningImplementation)>> =
+                    BTreeMap::new();
+                for (env_id, name, implementation) in targets {
+                    let Some(parsed) = parse_lightning_implementation(&implementation) else {
+                        tracing::warn!(
+                            env = %env_id,
+                            instance = %name,
+                            "unknown lightning implementation; skipping mesh"
+                        );
+                        continue;
+                    };
+                    envs.entry(env_id).or_default().push((name, parsed));
                 }
-                for (env_id, names) in envs {
-                    if names.len() < 2 {
+                for (env_id, instances) in envs {
+                    if instances.len() < 2 {
                         continue;
                     }
                     let short = env_id.simple().to_string()[..12].to_string();
-                    match mesh.mesh_lightning_peers(&short, &names).await {
+                    match mesh.mesh_lightning_peers(&short, &instances).await {
                         Ok(0) => {}
                         Ok(initiated) => {
                             tracing::info!(env = %short, initiated, "lightning instances peered")

@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 use signet_core::bundle::{ConnectionBundle, LightningConnection};
-use signet_core::env::{BlockPolicy, CreateParams, EnvStatus};
+use signet_core::env::{BlockPolicy, CreateParams, EnvStatus, LightningImplementation};
 use signet_core::versions::VersionCatalog;
 use signet_db::{EnvironmentRow, PgPool};
 use signet_nostr::{ApiToken, verify_nip98_header};
@@ -269,8 +269,9 @@ async fn resolve_environment(
     }
 }
 
-/// Lightning validation: names unique per env; only lnd is
-/// buildable in v1 — the rest of the enum exists in the type space only.
+/// Lightning validation: names unique per env; only the two buildable
+/// implementations are accepted — the rest of the enum exists in the
+/// type space only.
 fn validate_lightning(instances: &[signet_core::env::LightningInstance]) -> Result<(), String> {
     let mut seen = std::collections::BTreeSet::new();
     for instance in instances {
@@ -296,9 +297,10 @@ fn validate_lightning(instances: &[signet_core::env::LightningInstance]) -> Resu
         if !matches!(
             instance.implementation,
             signet_core::env::LightningImplementation::Lnd
+                | signet_core::env::LightningImplementation::Cln
         ) {
             return Err(format!(
-                "lightning implementation `{}` is not available (only lnd is supported)",
+                "lightning implementation `{}` is not available (only lnd and cln are supported)",
                 instance.implementation.as_str()
             ));
         }
@@ -577,7 +579,7 @@ async fn environment_create(state: &AppState, id: Id, caller: Caller, params: Va
         env_id,
         lightning
             .iter()
-            .map(|(instance, _)| instance.name.clone())
+            .map(|(instance, _)| (instance.name.clone(), instance.implementation))
             .collect(),
     );
 
@@ -679,8 +681,12 @@ async fn bundle_response(
 /// instances are each other's only peers. Wallets come up after
 /// provisioning returns, so mesh in the background: retry until every
 /// instance answers getinfo, then cross-connect the pairs.
-fn spawn_lightning_mesh(state: &AppState, env_id: Uuid, names: Vec<String>) {
-    if names.len() < 2 {
+fn spawn_lightning_mesh(
+    state: &AppState,
+    env_id: Uuid,
+    instances: Vec<(String, LightningImplementation)>,
+) {
+    if instances.len() < 2 {
         return;
     }
     let orchestrator = state.orchestrator.clone();
@@ -689,7 +695,7 @@ fn spawn_lightning_mesh(state: &AppState, env_id: Uuid, names: Vec<String>) {
         const ATTEMPTS: u64 = 80;
         const INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
         for _ in 0..ATTEMPTS {
-            match orchestrator.mesh_lightning_peers(&short, &names).await {
+            match orchestrator.mesh_lightning_peers(&short, &instances).await {
                 Ok(initiated) => {
                     tracing::info!(env = %short, initiated, "lightning instances peered");
                     return;
@@ -729,29 +735,46 @@ async fn lightning_connections(
             tracing::warn!(env = %env_id, instance = %instance.name, "instance has no port; omitting");
             return connections;
         };
+        let Some(implementation) = crate::parse_lightning_implementation(&instance.implementation)
+        else {
+            tracing::warn!(
+                env = %env_id,
+                instance = %instance.name,
+                implementation = %instance.implementation,
+                "unknown lightning implementation; omitting instance"
+            );
+            continue;
+        };
         let connection = async {
-            let macaroon = state
+            let (auth_kind, auth_value) = state
                 .orchestrator
-                .lightning_admin_macaroon(&short, &instance.name)
+                .lightning_credential(&short, &instance.name, implementation)
                 .await?;
             let tls_ca = state
                 .orchestrator
-                .lightning_tls_ca(&short, &instance.name)
+                .lightning_tls_ca(&short, &instance.name, implementation)
                 .await?;
             let node_id = state
                 .orchestrator
-                .lightning_node_id(&short, &instance.name)
+                .lightning_node_id(&short, &instance.name, implementation)
                 .await?;
             Ok::<_, signet_orchestrator::OrchestrateError>(LightningConnection {
                 implementation: instance.implementation.clone(),
                 node_id: node_id.clone(),
                 node_uri: state.orchestrator.lightning_node_uri(port, &node_id),
                 rest_url: state.orchestrator.lightning_rest_url(port),
-                grpc_url: state.orchestrator.lightning_grpc_url(port),
+                // Only lnd's gRPC credential (macaroon) rides the bundle;
+                // cln's grpc surface needs a cert+key pair it cannot carry.
+                grpc_url: match implementation {
+                    LightningImplementation::Lnd => {
+                        Some(state.orchestrator.lightning_grpc_url(port))
+                    }
+                    _ => None,
+                },
                 tls_cert: tls_ca,
                 auth: signet_core::bundle::BundleAuth {
-                    kind: "macaroon".to_string(),
-                    value: macaroon,
+                    kind: auth_kind,
+                    value: auth_value,
                 },
             })
         };
@@ -950,7 +973,7 @@ async fn environment_update(state: &AppState, id: Id, caller: Caller, params: Va
         row.id,
         lightning
             .iter()
-            .map(|(instance, _)| instance.name.clone())
+            .map(|(instance, _)| (instance.name.clone(), instance.implementation))
             .collect(),
     );
 
@@ -1480,11 +1503,12 @@ mod tests {
     }
 
     #[test]
-    fn validate_lightning_accepts_unique_lnd_instances() {
+    fn validate_lightning_accepts_unique_lnd_and_cln_instances() {
         assert!(
             validate_lightning(&[
                 instance("ln-alice", signet_core::env::LightningImplementation::Lnd),
                 instance("ln-bob", signet_core::env::LightningImplementation::Lnd),
+                instance("ln-carol", signet_core::env::LightningImplementation::Cln),
             ])
             .is_ok()
         );
@@ -1502,8 +1526,8 @@ mod tests {
         );
         assert!(
             validate_lightning(&[instance(
-                "ln-cln",
-                signet_core::env::LightningImplementation::Cln
+                "ln-eclair",
+                signet_core::env::LightningImplementation::Eclair
             )])
             .is_err()
         );
