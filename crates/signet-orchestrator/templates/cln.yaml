@@ -57,7 +57,10 @@ spec:
             - --bitcoin-rpcport=38332
             - --bitcoin-rpcuser=$(BITCOIN_RPC_USER)
             - --bitcoin-rpcpassword=$(BITCOIN_RPC_PASSWORD)
-            # v26 removed --port; autolisten binds the default 0.0.0.0:9735
+            # v26 removed --port, and autolisten binds the NETWORK default
+            # (signet: 39735). Pin 9735 so the Service, containerPort, and
+            # mesh targets stay identical across implementations.
+            - --bind-addr=0.0.0.0:9735
             - --clnrest-port=7572
             - --clnrest-host=0.0.0.0
             - --clnrest-protocol=https
